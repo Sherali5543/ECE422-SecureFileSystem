@@ -5,14 +5,16 @@ storage/*
 # Secrets
 .env
 .env.*
-*certs*
-*secrets*
-!*secrets/README.md
-!*secrets/server-cert.pem
 !.env.example
-!*certs/ca-cert.pem
 
+# Certificates
+**/certs/*
+!**/certs/ca-cert.pem
 
+# Secrets directories
+**/secrets/*
+!**/secrets/README.md
+!**/secrets/server-cert.pem
 
 # Potential test folder
 coverage/
