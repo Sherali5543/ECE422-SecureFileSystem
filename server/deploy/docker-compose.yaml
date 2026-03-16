@@ -1,59 +1,27 @@
 services:
-  db:
-    image: mysql:8.0
-    container_name: sfs-db
-    restart: unless-stopped
-    environment:
-      MYSQL_DATABASE: ${DB_NAME}
-      MYSQL_USER: ${DB_USER}
-      MYSQL_PASSWORD_FILE: /run/secrets/db_password
-      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
-    secrets:
-      - db_password
-      - mysql_root_password
-    volumes:
-      - ./storage/mysql_data:/var/lib/mysql
-      - ../db/init:/docker-entrypoint-initdb.d:ro
-    healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u${DB_USER} -p$$(cat /run/secrets/db_password) --silent"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
   server:
     build:
       context: ../..
       dockerfile: server/Dockerfile
     container_name: sfs-server
     restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
     ports:
-      - "${SERVER_PORT:-8443}:8443"
+      - "443:8443"
     environment:
       LISTEN_HOST: 0.0.0.0
       LISTEN_PORT: 8443
-      DB_HOST: db
-      DB_PORT: 3306
-      DB_NAME: ${DB_NAME}
-      DB_USER: ${DB_USER}
-      DB_PASSWORD_FILE: /run/secrets/db_password
+      DB_PATH: /app/data/sfs.db
       TLS_CERT_FILE: /run/secrets/tls_cert
       TLS_KEY_FILE: /run/secrets/tls_key
       STORAGE_ROOT: /app/storage
     secrets:
-      - db_password
       - tls_cert
       - tls_key
     volumes:
       - ./storage/sfs_storage:/app/storage
+      - ./storage/sqlite_data:/app/data
 
 secrets:
-  db_password:
-    file: ./secrets/db_password.txt
-  mysql_root_password:
-    file: ./secrets/mysql_root_password.txt
   tls_cert:
     file: ./secrets/server-cert.pem
   tls_key:

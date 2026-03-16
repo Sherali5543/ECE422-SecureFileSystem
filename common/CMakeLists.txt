@@ -4,12 +4,12 @@ pkg_check_modules(SODIUM REQUIRED libsodium)
 pkg_check_modules(OPENSSL REQUIRED openssl)
 
 add_library(common STATIC
-    src/config.c
-    src/crypto.c
-    src/db.c
-    src/net.c
-    src/protocol.c
-    src/util.c
+    src/tls.c
+    # src/crypto.c
+    # src/db.c
+    # src/net.c
+    # src/protocol.c
+    # src/util.c
 )
 
 target_include_directories(common PUBLIC
