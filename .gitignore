@@ -1,0 +1,26 @@
+build/
+storage/
+.env
+.env.*
+!.env.example
+!*.keep
+
+*/*secrets/*
+!*secrets/README.md
+
+# Potential test folder
+coverage/
+
+# Build artifacts/logs
+*.o
+*.out
+*.a
+*.so
+*.log
+
+# IDE artifacts
+config.json
+package-lock.json
+.DS_Store
+.vscode*
+.vscode/*
