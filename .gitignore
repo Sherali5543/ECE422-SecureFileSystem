@@ -1,12 +1,18 @@
 build/*
 storage/*
-.env
-.env.*
-!.env.example
 !*.keep
 
+# Secrets
+.env
+.env.*
+*certs*
 *secrets*
 !*secrets/README.md
+!*secrets/server-cert.pem
+!.env.example
+!*certs/ca-cert.pem
+
+
 
 # Potential test folder
 coverage/
