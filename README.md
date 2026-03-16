@@ -6,9 +6,9 @@
 
 **Authors:**
 
--   Shaheer Khan\
--   Andy Charlton\
--   Abs Salim\
+-   Shaheer Khan
+-   Andy Charlton
+-   Abs Salim
 -   Julian Jedrych
 
 ------------------------------------------------------------------------
