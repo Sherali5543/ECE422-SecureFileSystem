@@ -10,6 +10,7 @@ storage/*
 # Certificates
 **/certs/*
 !**/certs/ca-cert.pem
+!**/certs/README.md
 
 # Secrets directories
 **/secrets/*
