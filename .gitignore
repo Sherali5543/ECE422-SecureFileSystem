@@ -5,7 +5,7 @@ storage/
 !.env.example
 !*.keep
 
-*/*secrets/*
+*secrets*
 !*secrets/README.md
 
 # Potential test folder
