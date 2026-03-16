@@ -1,5 +1,5 @@
-build/
-storage/
+build/*
+storage/*
 .env
 .env.*
 !.env.example
