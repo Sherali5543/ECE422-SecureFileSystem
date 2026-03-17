@@ -11,13 +11,6 @@ typedef struct{
  * 
  * @return Session* 
  */
-Session* login();
-
-/**
- * @brief Destorys a session, call this at logout.
- * 
- * @param s 
- */
-void destroy_session(Session *s);
+Session login();
 
 #endif

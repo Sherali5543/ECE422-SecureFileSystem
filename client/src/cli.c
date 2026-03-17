@@ -39,7 +39,7 @@ void cli_loop(Session* session){
         } else if (strcmp(cmd, "mv") == 0) {
             printf("'mv' not yet implemented!\n");
         } else if (strcmp(cmd, "logout") == 0) {
-            printf("'logout' not yet implemented!\n");
+            break;
         } else {
             printf("unknown command: %s\n", args[0]);
         }
