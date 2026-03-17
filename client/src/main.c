@@ -2,6 +2,6 @@
 #include "session.h"
 
 int main(){
-    Session* session = login();
+    Session session = login();
     cli_loop(session);
 }
