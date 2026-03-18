@@ -1,6 +1,8 @@
 #ifndef CLI_UTILS
 #define CLI_UTILS
 
+#include "session.h"
+
 /**
  * @brief Prompts an input from the user. Returns the users input as a string.
  * 
@@ -18,5 +20,7 @@ It will fill in the array till it is full, anything leftover is not allocated to
  * @param size 
  */
 void str_to_arr(char* str, char* array[], int size);
+
+void cli_loop(Session session);
 
 #endif

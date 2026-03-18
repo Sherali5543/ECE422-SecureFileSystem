@@ -17,8 +17,9 @@ void cli_loop(Session session){
     char* input;
 
     while (true) {
-        printf("username:~/path$ ");
+        printf("%s:~/path$ ", session.username);
         input = scan();
+
 
         if (input == NULL) {
             fprintf(stderr, "Failed to read input\n");
@@ -39,6 +40,7 @@ void cli_loop(Session session){
         } else if (strcmp(cmd, "mv") == 0) {
             printf("'mv' not yet implemented!\n");
         } else if (strcmp(cmd, "logout") == 0) {
+            destory_session(session);
             break;
         } else {
             printf("unknown command: %s\n", args[0]);

@@ -1,5 +1,5 @@
-#include "cli.c"
 #include "session.h"
+#include "cli_utils.h"
 
 int main(){
     Session session = login();
