@@ -1,6 +1,13 @@
 #ifndef CLI_UTILS
 #define CLI_UTILS
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <termios.h>
+#include <stdbool.h>
+#include <unistd.h>
+
 #include "session.h"
 
 /**
@@ -22,5 +29,12 @@ It will fill in the array till it is full, anything leftover is not allocated to
 void str_to_arr(char* str, char* array[], int size);
 
 void cli_loop(Session *session);
+
+/**
+ * @brief Enables or disables echo for user input
+ * 
+ * @param enable 
+ */
+void setStdinEcho(bool enable);
 
 #endif

@@ -3,10 +3,6 @@ supported commands:
 login, logout, ls, cd, mkdir, create, read, write, rm, and mv
 */
 
-#include <stdio.h>
-#include <stdbool.h>
-#include <string.h>
-#include <stdlib.h>
 #include "cli_utils.h"
 #include "session.h"
 

@@ -1,7 +1,5 @@
 #include "cli_utils.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <termios.h>
 
 char* scan(){
     int c;
@@ -44,4 +42,15 @@ void str_to_arr(char* str, char* array[], int size){
         array[i] = NULL;
         i++;
     } 
+}
+
+void setStdinEcho(bool enable){
+    struct termios tty;
+    tcgetattr(STDIN_FILENO, &tty);
+    if (!enable) {
+        tty.c_lflag &= ~ECHO;
+    } else {
+        tty.c_lflag |= ECHO;
+    }
+    (void)tcsetattr(STDIN_FILENO, TCSANOW, &tty);
 }

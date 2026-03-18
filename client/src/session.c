@@ -1,15 +1,18 @@
 #include "session.h"
-#include <stdio.h>
-#include <stdlib.h>
 #include "cli_utils.h"
 
 Session login(){
     printf("Username: ");
+    setStdinEcho(true);
     char* username = scan();
+
     printf("Password: ");
+    setStdinEcho(false);
     char* pwd = scan();
+
     // TODO: Proper username and password check
-    printf("Ok, ill take your word for it!\n");
+    printf("\nOk, ill take your word for it! (Password we read was: %s)\n", pwd);
+    setStdinEcho(true);
 
     Session s;
     s.id = 0;
