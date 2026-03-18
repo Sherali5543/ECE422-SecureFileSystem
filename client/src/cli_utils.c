@@ -1,29 +1,20 @@
 #include "cli_utils.h"
 
 char* scan(){
-    int c;
-    int size = 16;
-    int i = 0;
+    char* line = NULL;
+    size_t len = 0;
+    ssize_t read;
 
-    char *string = malloc(size);
-    if (string == NULL)
+    read = getline(&line, &len, stdin);
+    if(read == -1){
+        free(line);
         return NULL;
-
-    while ((c = getchar()) != '\n' && c != EOF) {
-        if (i >= size - 1) {
-            size *= 2;
-            char *temp = realloc(string, size);
-            if (temp == NULL) {
-                free(string);
-                return NULL;
-            }
-            string = temp;
-        }
-        string[i++] = (char)c;
+    }
+    if(line[read-1] == '\n'){
+        line[read-1] = '\0';
     }
 
-    string[i] = '\0';
-    return string;
+    return line;
 }
 
 void str_to_arr(char* str, char* array[], int size){
