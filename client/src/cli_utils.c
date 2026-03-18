@@ -1,5 +1,4 @@
 #include "cli_utils.h"
-#include <termios.h>
 
 char* scan(){
     int c;
