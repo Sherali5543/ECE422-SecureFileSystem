@@ -37,6 +37,7 @@ void cli_loop(Session *session){
             printf("'mv' not yet implemented!\n");
         } else if (strcmp(cmd, "logout") == 0) {
             destory_session(session);
+            free(input);
             break;
         } else {
             printf("unknown command: %s\n", args[0]);
