@@ -12,12 +12,12 @@ login, logout, ls, cd, mkdir, create, read, write, rm, and mv
 
 #define MAX_ARGS 3
 
-void cli_loop(Session session){
+void cli_loop(Session *session){
     char* args[MAX_ARGS];
     char* input;
 
     while (true) {
-        printf("%s:~/path$ ", session.username);
+        printf("%s:~/path$ ", session->username);
         input = scan();
 
 

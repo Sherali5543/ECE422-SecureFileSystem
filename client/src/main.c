@@ -3,5 +3,5 @@
 
 int main(){
     Session session = login();
-    cli_loop(session);
+    cli_loop(&session);
 }

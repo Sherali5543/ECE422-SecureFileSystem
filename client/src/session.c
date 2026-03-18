@@ -18,6 +18,6 @@ Session login(){
     return s;
 }
 
-void destory_session(Session s){
-    free(s.username);
+void destory_session(Session *s){
+    free(s->username);
 }
