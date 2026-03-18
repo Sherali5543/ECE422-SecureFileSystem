@@ -36,7 +36,7 @@ void cli_loop(Session *session){
         } else if (strcmp(cmd, "mv") == 0) {
             printf("'mv' not yet implemented!\n");
         } else if (strcmp(cmd, "logout") == 0) {
-            destory_session(session);
+            destroy_session(session);
             free(input);
             break;
         } else {

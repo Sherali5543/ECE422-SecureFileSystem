@@ -21,6 +21,6 @@ Session login(){
     return s;
 }
 
-void destory_session(Session *s){
+void destroy_session(Session *s){
     free(s->username);
 }

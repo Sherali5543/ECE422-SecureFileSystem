@@ -19,6 +19,6 @@ Session login();
  * 
  * @param s 
  */
-void destory_session(Session *s);
+void destroy_session(Session *s);
 
 #endif
