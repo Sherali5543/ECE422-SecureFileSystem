@@ -14,7 +14,7 @@ void cli_loop(Session *session){
 
     while (true) {
         printf("%s:~/path$ ", session->username);
-        input = scan();
+        input = get_input();
 
 
         if (input == NULL) {

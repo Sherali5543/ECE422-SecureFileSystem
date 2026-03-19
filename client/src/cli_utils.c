@@ -1,6 +1,6 @@
 #include "cli_utils.h"
 
-char* scan(){
+char* get_input(){
     char* line = NULL;
     size_t len = 0;
     ssize_t read;

@@ -4,11 +4,11 @@
 Session login(){
     printf("Username: ");
     setStdinEcho(true);
-    char* username = scan();
+    char* username = get_input();
 
     printf("Password: ");
     setStdinEcho(false);
-    char* pwd = scan();
+    char* pwd = get_input();
 
     // TODO: Proper username and password check
     printf("\nOk, ill take your word for it! (Password we read was: %s)\n", pwd);

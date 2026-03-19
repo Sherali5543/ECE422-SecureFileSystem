@@ -16,7 +16,7 @@
  * IMPORTANT: you MUST free the input after you are done with it.
  * @return char* 
  */
-char* scan();
+char* get_input();
 
 /**
  * @brief Fills in the array with words from a string.
