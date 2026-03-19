@@ -3,13 +3,12 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(SODIUM REQUIRED libsodium)
 pkg_check_modules(OPENSSL REQUIRED openssl)
 
-add_library(common STATIC
-    src/tls.c
-    # src/crypto.c
-    # src/db.c
-    # src/net.c
-    # src/protocol.c
-    # src/util.c
+add_library(common 
+     src/tls.c
+#     # src/crypto.c
+#     # src/net.c
+#     # src/protocol.c
+#     # src/util.c
 )
 
 target_include_directories(common PUBLIC
@@ -26,10 +25,9 @@ target_link_directories(common PUBLIC
 target_link_libraries(common PUBLIC
     ${SODIUM_LIBRARIES}
     ${OPENSSL_LIBRARIES}
-    mysqlclient
 )
 
-target_compile_options(common PRIVATE
+target_compile_options(common PUBLIC
     ${SODIUM_CFLAGS_OTHER}
     ${OPENSSL_CFLAGS_OTHER}
 )
