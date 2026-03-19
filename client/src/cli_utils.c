@@ -38,7 +38,7 @@ void setStdinEcho(bool enable){
     struct termios tty;
     tcgetattr(STDIN_FILENO, &tty);
     if (!enable) {
-        tty.c_lflag &= ~ECHO;
+        tty.c_lflag &= ~(tcflag_t)ECHO;
     } else {
         tty.c_lflag |= ECHO;
     }
