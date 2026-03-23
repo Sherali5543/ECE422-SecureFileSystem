@@ -250,7 +250,6 @@ ssize_t http_build_header(const http_message_t* msg,
   if (checklen(msg->auth_token, HTTP_MAX_HEADER_VALUE) || // Don't check content-length cuz ul >=0
       checklen(msg->connection, HTTP_MAX_HEADER_VALUE))
     return -1;
-
   int offset = snprintf(headers, sizeof(headers),
                         "Authorization: %s\r\n"
                         "Content-length: %lu\r\n"

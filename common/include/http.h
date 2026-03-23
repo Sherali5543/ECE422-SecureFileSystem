@@ -158,7 +158,6 @@ ssize_t http_build_header(const http_message_t* msg,
  *
  * BODY              // Body termination determined via data type
  */
-
 /* Response syntax
  * HTTP/1.1 CODE REASON/PHRASE
  * Content-length
