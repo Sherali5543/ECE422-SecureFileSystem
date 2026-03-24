@@ -121,9 +121,11 @@ SSL_CTX* tls_client_config(const char* ca_cert) {
 SSL* tls_client_connect(SSL_CTX* ctx, const char* server_addr,
                         const char* server_port) {
   BIO* cbio = BIO_new_connect(server_addr);
+  if (cbio == NULL)
+    tls_error(ctx, NULL, NULL, "Failed to create client BIO");
   BIO_set_conn_port(cbio, server_port);
-  BIO_set_sock_type(cbio, SOCK_STREAM);
-  BIO_do_connect(cbio);
+  if (BIO_do_connect(cbio) <= 0)
+    tls_error(ctx, cbio, NULL, "Failed to connect to server");
 
   SSL* ssl = SSL_new(ctx);
   if (ssl == NULL)
