@@ -15,12 +15,14 @@ void do_something(SSL* ssl) {
   };
 
   char buf[HTTP_MAX_PREAMBLE_LEN];
-  if(http_build_header(&msg, buf, REQUEST, NONE) != 0){
+  printf("Building message\n");
+  if(http_build_header(&msg, buf, REQUEST, NONE) <= 0){
     printf("ERROR\n");
     return;
   }
   ssize_t nwritten = 0;
 
+  printf("Writing message\n");
   nwritten = tls_write(ssl, (void*)buf, strlen(buf));
   if ((size_t)nwritten != strlen(buf)) {
     printf("Error writing\n");
@@ -30,7 +32,9 @@ void do_something(SSL* ssl) {
   llhttp_t parser;
   llhttp_settings_t settings;
   http_parse_ctx_t ctx;
-  if (http_init_contex(&ctx) != 0) {
+  printf("Init Parser\n");
+  if (http_init_context(&ctx) != 0) {
+    printf("early return\n");
     return;
   }
   http_parser_init(&parser, &settings, RESPONSE);

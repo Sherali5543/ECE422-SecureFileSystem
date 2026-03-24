@@ -1,5 +1,7 @@
 #ifndef HTTP_H
 #define HTTP_H
+#include <sys/types.h>
+
 #include "llhttp.h"
 
 #define HTTP_MAX_METHOD_LEN 16
@@ -35,7 +37,7 @@ typedef struct {
   http_method_t method;
   http_message_type_t type;
   char path[HTTP_MAX_PATH_LEN];
-  char query[HTTP_MAX_QUERY_LEN];  // Use this for reason
+  char query[HTTP_MAX_QUERY_LEN];
   char reason[HTTP_MAX_QUERY_LEN];
 
   int status_code;
@@ -81,13 +83,13 @@ typedef struct {
 } http_parse_ctx_t;
 
 /*
- * @brief Init context object 
+ * @brief Init context object
  *
- * @param ctx Context object 
+ * @param ctx Context object
  *
  * @return int error code. -1 if fail 0 if success
  */
-int http_init_contex(http_parse_ctx_t* ctx);
+int http_init_context(http_parse_ctx_t* ctx);
 
 /*
  * @brief Setup the http parser, required before calling any other function
@@ -138,11 +140,12 @@ http_read_status_t http_parse_message(char* buf, size_t len, llhttp_t* parser,
  * @param type Enum type of message REQUEST or RESPONSE
  * @param content_type Enum type of body NONE, JSON, or STREAM
  *
- * @return int Status code -1 fail 0 success
+ * @return int Status code -1 fail N bytes for size written success
  */
-int http_build_header(const http_message_t* msg, char out[HTTP_MAX_PREAMBLE_LEN],
-                      http_message_type_t type,
-                      http_content_type_t content_type);
+ssize_t http_build_header(const http_message_t* msg,
+                          char out[HTTP_MAX_PREAMBLE_LEN],
+                          http_message_type_t type,
+                          http_content_type_t content_type);
 
 /* Request syntax
  * METHOD PATH?QUERY HTTP/1.1

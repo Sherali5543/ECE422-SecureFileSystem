@@ -2,10 +2,9 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <stdlib.h>
-
 
 static int commit_header(llhttp_t* parser) {
   http_parse_ctx_t* data = parser->data;
@@ -192,9 +191,20 @@ http_read_status_t http_parse_message(char* buf, size_t len, llhttp_t* parser,
   return HTTP_READ_NEED_MORE;
 }
 
-int http_build_header(const http_message_t* msg, char out[HTTP_MAX_PREAMBLE_LEN],
-                      http_message_type_t type,
-                      http_content_type_t content_type) {
+static int checklen(const char* str, size_t cap) {
+  if (!str || strnlen(str, cap + 1) > cap) {
+    printf("String longer than cap\n");
+    return 1;
+  }
+
+  printf("Returning 0\n");
+  return 0;
+}
+
+ssize_t http_build_header(const http_message_t* msg,
+                          char out[HTTP_MAX_PREAMBLE_LEN],
+                          http_message_type_t type,
+                          http_content_type_t content_type) {
   char start_line[HTTP_MAX_START_LEN];
 
   if (type == REQUEST) {
@@ -218,24 +228,36 @@ int http_build_header(const http_message_t* msg, char out[HTTP_MAX_PREAMBLE_LEN]
     }
 
     if (strnlen(msg->query, HTTP_MAX_QUERY_LEN) > 0) {
+      if (checklen(msg->path, HTTP_MAX_PATH_LEN) ||
+          checklen(msg->query, HTTP_MAX_QUERY_LEN))
+        return -1;
       snprintf(start_line, HTTP_MAX_START_LEN, "%s %s?%s HTTP/1.1\r\n", method,
                msg->path, msg->query);
     } else {
+      if (checklen(msg->path, HTTP_MAX_PATH_LEN)) return -1;
       snprintf(start_line, HTTP_MAX_START_LEN, "%s %s HTTP/1.1\r\n", method,
                msg->path);
     }
   } else {
+    if (checklen(msg->reason, HTTP_MAX_QUERY_LEN) || msg->status_code > 999 ||
+        msg->status_code < 0)
+      return -1;
     snprintf(start_line, HTTP_MAX_START_LEN, "HTTP/1.1 %d %s\r\n",
              msg->status_code, msg->reason);
   }
 
   // I'm going to assume all headers exist!
   char headers[HTTP_MAX_HEADER_LEN * 5];
+  if (checklen(msg->auth_token, HTTP_MAX_HEADER_VALUE) || // Don't check content-length cuz ul >=0
+      checklen(msg->connection, HTTP_MAX_HEADER_VALUE))
+    return -1;
+
   int offset = snprintf(headers, sizeof(headers),
                         "Authorization: %s\r\n"
                         "Content-length: %lu\r\n"
                         "Connection: %s\r\n",
                         msg->auth_token, msg->content_length, msg->connection);
+  if (offset < 0 || (size_t)offset >= sizeof(headers)) return -1;
 
   switch (content_type) {
     case JSON:
@@ -256,14 +278,13 @@ int http_build_header(const http_message_t* msg, char out[HTTP_MAX_PREAMBLE_LEN]
            "%s"
            "\r\n",
            start_line, headers);
-
-  return 0;
+  return (ssize_t)strlen(out);
 }
 
-int http_init_contex(http_parse_ctx_t* ctx){
+int http_init_context(http_parse_ctx_t* ctx) {
   memset(ctx, 0, sizeof(*ctx));
   ctx->msg = init_message_struct();
-  if(!ctx->msg){
+  if (!ctx->msg) {
     fprintf(stderr, "alloc failed\n");
     return -1;
   }

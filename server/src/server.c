@@ -6,7 +6,8 @@ void handle_client(SSL* ssl) {
   llhttp_t parser;
   llhttp_settings_t settings;
   http_parse_ctx_t ctx;
-  if (http_init_contex(&ctx) != 0) {
+  if (http_init_context(&ctx) != 0) {
+    printf("early return");
     return;
   }
   http_parser_init(&parser, &settings, REQUEST);
@@ -29,8 +30,9 @@ void handle_client(SSL* ssl) {
   printf("Status code = %d\n", ctx.msg->status_code);
   memset(buf, 0, sizeof(buf));
   ctx.msg->status_code = 200;
-  http_build_header(ctx.msg, buf, RESPONSE, NONE);
-  nwritten = tls_write(ssl, buf, (size_t)nread);
+  ssize_t header_len = http_build_header(ctx.msg, buf, RESPONSE, NONE);
+  if(header_len < 0) return;
+  nwritten = tls_write(ssl, buf, (size_t)header_len);
   if (nwritten <= 0) return;
   total += (size_t)nwritten;
   fprintf(stderr, "Client connection closed %zu bytes sent\n", total);
