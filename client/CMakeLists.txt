@@ -3,6 +3,7 @@ add_executable(client
     src/cli.c
     src/cli_utils.c
     src/session.c
+    src/encryption.c
 )
 
 target_link_libraries(client PRIVATE common)
