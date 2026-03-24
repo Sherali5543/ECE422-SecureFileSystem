@@ -2,6 +2,7 @@ add_executable(client
     src/main.c
     src/cli.c
     src/cli_utils.c
+    src/file_utils.c
     src/session.c
 )
 

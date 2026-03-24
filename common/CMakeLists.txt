@@ -26,7 +26,6 @@ target_link_directories(common PUBLIC
 target_link_libraries(common PUBLIC
     ${SODIUM_LIBRARIES}
     ${OPENSSL_LIBRARIES}
-    mysqlclient
 )
 
 target_compile_options(common PRIVATE

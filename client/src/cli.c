@@ -4,6 +4,7 @@ login, logout, ls, cd, mkdir, create, read, write, rm, and mv
 */
 
 #include "cli_utils.h"
+#include "file_utils.h"
 #include "session.h"
 
 #define MAX_ARGS 3
@@ -39,6 +40,10 @@ void cli_loop(Session *session){
             destroy_session(session);
             free(input);
             break;
+        } else if (strcmp(cmd, "read") == 0){
+            read_file();
+        } else if (strcmp(cmd, "write") == 0){
+            write_file();
         } else {
             printf("unknown command: %s\n", args[0]);
         }
