@@ -1,121 +1,156 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-#include "llhttp.h"
+#include "http.h"
 
-typedef struct {
-  char url[256];
-  char current_header_field[128];
-  char current_header_value[256];
-} parser_data_t;
-
-static int on_message_begin(llhttp_t* parser) {
-  printf("message begin\n");
-  return 0;
-}
-
-static int on_url(llhttp_t* parser, const char* at, size_t length) {
-  parser_data_t* data = (parser_data_t*)parser->data;
-
-  size_t copy_len = length;
-  if (copy_len >= sizeof(data->url)) {
-    copy_len = sizeof(data->url) - 1;
-  }
-
-  memcpy(data->url, at, copy_len);
-  data->url[copy_len] = '\0';
-
-  printf("url: %s\n", data->url);
-  return 0;
-}
-
-static int on_header_field(llhttp_t* parser, const char* at, size_t length) {
-  parser_data_t* data = (parser_data_t*)parser->data;
-
-  size_t copy_len = length;
-  if (copy_len >= sizeof(data->current_header_field)) {
-    copy_len = sizeof(data->current_header_field) - 1;
-  }
-
-  memcpy(data->current_header_field, at, copy_len);
-  data->current_header_field[copy_len] = '\0';
-
-  return 0;
-}
-
-static int on_header_value(llhttp_t* parser, const char* at, size_t length) {
-  parser_data_t* data = (parser_data_t*)parser->data;
-
-  size_t copy_len = length;
-  if (copy_len >= sizeof(data->current_header_value)) {
-    copy_len = sizeof(data->current_header_value) - 1;
-  }
-
-  memcpy(data->current_header_value, at, copy_len);
-  data->current_header_value[copy_len] = '\0';
-
-  return 0;
-}
-
-static int on_header_value_complete(llhttp_t* parser) {
-  parser_data_t* data = (parser_data_t*)parser->data;
-  printf("header: %s: %s\n", data->current_header_field,
-         data->current_header_value);
-  return 0;
-}
-
-static int on_headers_complete(llhttp_t* parser) {
-  printf("method: %s\n",
-         llhttp_method_name((enum llhttp_method)llhttp_get_method(parser)));
-  printf("HTTP version: %d.%d\n", llhttp_get_http_major(parser),
-         llhttp_get_http_minor(parser));
-  return 0;
-}
-
-static int on_body(llhttp_t* parser, const char* at, size_t length) {
-  printf("body chunk: %.*s\n", (int)length, at);
-  return 0;
-}
-
-static int on_message_complete(llhttp_t* parser) {
-  printf("message complete\n");
-  return 0;
-}
-
-int main(void) {
-  const char* request =
-      "GET /hello?name=shaheer HTTP/1.1\r\n"
-      "Host: example.com\r\n"
-      "User-Agent: demo-client/1.0\r\n"
-      "Accept: */*\r\n"
-      "Content-length: 12\r\n"
-      "\r\n"
-      "example-body";
-
+int test(void) {
   llhttp_t parser;
   llhttp_settings_t settings;
-  parser_data_t data;
+  http_parse_ctx_t ctx;
 
-  memset(&data, 0, sizeof(data));
-  llhttp_settings_init(&settings);
-
-  settings.on_message_begin = on_message_begin;
-  settings.on_url = on_url;
-  settings.on_header_field = on_header_field;
-  settings.on_header_value = on_header_value;
-  settings.on_header_value_complete = on_header_value_complete;
-  settings.on_headers_complete = on_headers_complete;
-  settings.on_body = on_body;
-  settings.on_message_complete = on_message_complete;
-
-  llhttp_init(&parser, HTTP_REQUEST, &settings);
-  parser.data = &data;
-
-  enum llhttp_errno err = llhttp_execute(&parser, request, strlen(request));
-  if (err != HPE_OK) {
-    fprintf(stderr, "Parse error: %s %s\n", llhttp_errno_name(err),
-            parser.reason ? parser.reason : "");
+  memset(&ctx, 0, sizeof(ctx));
+  ctx.msg = init_message_struct();
+  if (!ctx.msg) {
+    fprintf(stderr, "alloc failed\n");
     return 1;
   }
 
+  http_parser_init(&parser, &settings, RESPONSE);
+
+  // char req[] =
+  //     "GET /files?path=/home/user/docs HTTP/1.1\r\n"
+  //     "Host: example.com\r\n"
+  //     "Content-Type: application/json\r\n"
+  //     "Content-Length: 0\r\n"
+  //     "Connection: keep-alive\r\n"
+  //     "Authorization: Bearer abc123\r\n"
+  //     "\r\n";
+  char* req =
+      "HTTP/1.1 200 OK\r\n"
+      "Content-Type: application/json\r\n"
+      "Content-Length: 17\r\n"
+      "Connection: close\r\n"
+      "\r\n"
+      "{\"ok\":true}\n";
+
+  http_read_status_t st = http_parse_message(req, strlen(req), &parser, &ctx);
+
+  printf("status = %d\n", st);
+  printf("method = %d\n", ctx.msg->method == RESPONSE);
+  printf("path = [%s]\n", ctx.msg->path);
+  printf("query = [%s]\n", ctx.msg->query);
+  printf("content_type = [%s]\n", ctx.msg->content_type);
+  printf("content_length = %zu\n", ctx.msg->content_length);
+  printf("connection = [%s]\n", ctx.msg->connection);
+  printf("auth = [%s]\n", ctx.msg->auth_token);
+  printf("Status code = %d\n", llhttp_get_status_code(&parser));
+  printf("Status code = %d\n", llhttp_get_status_code(&parser) != 0);
+
+  llhttp_t parser2;
+  llhttp_settings_t settings2;
+  http_parse_ctx_t ctx2;
+
+  memset(&ctx2, 0, sizeof(ctx2));
+  ctx2.msg = init_message_struct();
+  if (!ctx2.msg) {
+    fprintf(stderr, "alloc failed\n");
+    return 1;
+  }
+
+  http_parser_init(&parser2, &settings2, REQUEST);
+
+  char p1[] = "GET /files?path=/home/user/docs HTTP/1.1\r\nCon";
+  char p2[] = "tent-Type: application/json\r\nAuthoriz";
+  char p3[] = "ation: Bearer abc123\r\nConnection: keep-alive\r\n\r\n";
+
+  st = http_parse_message(p1, strlen(p1), &parser2, &ctx2);
+  printf("st1 = %d\n", st);
+  printf("status = %d\n", st);
+  printf("method = %d\n", ctx2.msg->method);
+  printf("path = [%s]\n", ctx2.msg->path);
+  printf("query = [%s]\n", ctx2.msg->query);
+  printf("content_type = [%s]\n", ctx2.msg->content_type);
+  printf("content_length = %zu\n", ctx2.msg->content_length);
+  printf("connection = [%s]\n", ctx2.msg->connection);
+  printf("auth = [%s]\n", ctx2.msg->auth_token);
+
+  st = http_parse_message(p2, strlen(p2), &parser2, &ctx2);
+  printf("st2 = %d\n", st);
+  printf("status = %d\n", st);
+  printf("method = %d\n", ctx2.msg->method);
+  printf("path = [%s]\n", ctx2.msg->path);
+  printf("query = [%s]\n", ctx2.msg->query);
+  printf("content_type = [%s]\n", ctx2.msg->content_type);
+  printf("content_length = %zu\n", ctx2.msg->content_length);
+  printf("connection = [%s]\n", ctx2.msg->connection);
+  printf("auth = [%s]\n", ctx2.msg->auth_token);
+
+  st = http_parse_message(p3, strlen(p3), &parser2, &ctx2);
+  printf("st3 = %d\n", st);
+  printf("status = %d\n", st);
+  printf("method = %d\n", ctx2.msg->method == GET);
+  printf("path = [%s]\n", ctx2.msg->path);
+  printf("query = [%s]\n", ctx2.msg->query);
+  printf("content_type = [%s]\n", ctx2.msg->content_type);
+  printf("content_length = %zu\n", ctx2.msg->content_length);
+  printf("connection = [%s]\n", ctx2.msg->connection);
+  printf("auth = [%s]\n", ctx2.msg->auth_token);
+  printf("Status code = %d\n", llhttp_get_status_code(&parser2));
+
+  http_message_t test_message = *ctx2.msg;
+  char out[HTTP_MAX_START_LEN + HTTP_MAX_HEADER_LEN * 5];
+  http_build_header(&test_message, out, REQUEST, NONE);
+  llhttp_t parser3;
+  llhttp_settings_t settings3;
+  http_parse_ctx_t ctx3;
+
+  memset(&ctx3, 0, sizeof(ctx3));
+  ctx3.msg = init_message_struct();
+  if (!ctx3.msg) {
+    fprintf(stderr, "alloc failed\n");
+    return 1;
+  }
+
+  http_parser_init(&parser3, &settings3, REQUEST);
+  st = http_parse_message(out, strlen(out), &parser3, &ctx3);
+  printf("st3 = %d\n", st);
+  printf("status = %d\n", st);
+  printf("method = %d\n", ctx3.msg->method == GET);
+  printf("path = [%s]\n", ctx3.msg->path);
+  printf("query = [%s]\n", ctx3.msg->query);
+  printf("content_type = [%s]\n", ctx3.msg->content_type);
+  printf("content_length = %zu\n", ctx3.msg->content_length);
+  printf("connection = [%s]\n", ctx3.msg->connection);
+  printf("auth = [%s]\n", ctx3.msg->auth_token);
+  printf("Status code = %d\n", llhttp_get_status_code(&parser3));
+
+
+  http_message_t test_message2 = *ctx.msg;
+  char out2[HTTP_MAX_START_LEN + HTTP_MAX_HEADER_LEN * 5];
+  http_build_header(&test_message2, out2, RESPONSE, NONE);
+  llhttp_t parser4;
+  llhttp_settings_t settings4;
+  http_parse_ctx_t ctx4;
+
+  memset(&ctx4, 0, sizeof(ctx4));
+  ctx4.msg = init_message_struct();
+  if (!ctx4.msg) {
+    fprintf(stderr, "alloc failed\n");
+    return 1;
+  }
+
+  http_parser_init(&parser4, &settings4, RESPONSE);
+  st = http_parse_message(out2, strlen(out2), &parser4, &ctx4);
+  printf("st4 = %d\n", st);
+  printf("status = %d\n", st);
+  printf("method = %d\n", ctx4.msg->method == GET);
+  printf("path = [%s]\n", ctx4.msg->path);
+  printf("query = [%s]\n", ctx4.msg->query);
+  printf("content_type = [%s]\n", ctx4.msg->content_type);
+  printf("content_length = %zu\n", ctx4.msg->content_length);
+  printf("connection = [%s]\n", ctx4.msg->connection);
+  printf("auth = [%s]\n", ctx4.msg->auth_token);
+  printf("Status code = %d\n", llhttp_get_status_code(&parser4));
   return 0;
+}
