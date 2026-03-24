@@ -57,7 +57,7 @@ The system is composed of three primary components:
          ▼
     Server
          │
-         ├── MySQL Database (metadata)
+         ├── SQLite Database (metadata)
          │
          └── Encrypted Storage (filesystem)
 
@@ -104,7 +104,7 @@ The server **never stores plaintext file contents**.
 
 ### Database
 
-The MySQL database stores **metadata only**, including:
+The SQLite database stores **metadata only**, including:
 
 -   users
 -   password hashes
@@ -222,8 +222,6 @@ Create required secret files inside:
 
 Required secrets include:
 
-    db_password.txt
-    mysql_root_password.txt
     server-cert.pem
     server-key.pem
 
