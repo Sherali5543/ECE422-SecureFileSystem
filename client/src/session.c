@@ -17,6 +17,8 @@ Session login(){
     Session s;
     s.id = 0;
     s.username = username;
+    s.user_keys = generate_read_keypair(username, pwd);
+    s.sign_keys = generate_signing_keypair(username, pwd);
 
     return s;
 }

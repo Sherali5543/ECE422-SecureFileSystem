@@ -4,7 +4,7 @@
 #include "encryption.h"
 
 int main(void){
-  connect_to_server(); // Minimal example. Left here for testing
+  // connect_to_server(); // Minimal example. Left here for testing
   Session session = login();
   cli_loop(&session);
 

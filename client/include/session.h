@@ -1,9 +1,13 @@
 #ifndef SESSION
 #define SESSION
 
+#include "encryption.h"
+
 typedef struct{
     int id;
     char* username;
+    UserKeys* user_keys;
+    SignKeys* sign_keys;
 } Session;
 
 /**

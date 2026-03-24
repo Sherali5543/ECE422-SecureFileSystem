@@ -1,6 +1,7 @@
 #include "file_utils.h"
+#include "encryption.h"
 
-void read_file(){
+void read_file(char* filepath){
     // assume file is decrypted ATM
     // using README as a demo
     FILE* fptr;
@@ -17,15 +18,19 @@ void read_file(){
     fclose(fptr);
 }
 
-void write_file(){
-    // make a temp file the user writes into.
-    // if they are different and the user doesnt 
-    // have permission to write throw error
-    char editor[] = "vi ";
-    char filepath[] = "../../README.md";
-    strcat(editor, filepath);
+void write_file(char* filepath){
+    // TODO: for now assume we always are allowed to write
+    // however we probably need to add communication with the server
+    // to verify the user is allowed to write before we let them
+    bool can_write = true;
 
-    system(editor);
+    if(can_write){
+        char editor[] = "vi ";
+        char filepath[] = "../../README.md";
+        strcat(editor, filepath);
+
+        system(editor);
+    }
 }
 
 void create_file(){
