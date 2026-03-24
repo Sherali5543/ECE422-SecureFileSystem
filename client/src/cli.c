@@ -7,6 +7,7 @@ login, logout, ls, cd, mkdir, create, read, write, rm, and mv
 #include "file_utils.h"
 #include "session.h"
 #include <sys/stat.h>
+#include <libgen.h>
 
 #define MAX_ARGS 3
 #define PATH_MAX 256
@@ -35,7 +36,7 @@ void cli_loop(Session *session){
 
         } else if (strcmp(cmd, "cd") == 0) {
             if(args[1] == NULL){
-                printf("cd: no arguements provided\n");
+                printf("cd: no arguments provided\n");
                 continue;
             } else if (chdir(args[1]) == -1) {
                 printf("No such file or directory: %s\n", args[1]);
@@ -45,28 +46,33 @@ void cli_loop(Session *session){
 
         } else if (strcmp(cmd, "mkdir") == 0) {
             if(args[1] == NULL){
-                printf("mkdir: no arguements provided\n");
+                printf("mkdir: no arguments provided\n");
             } else if (mkdir(args[1], 0755) != 0) {
                 printf("failed to create dir");
             }
 
         } else if (strcmp(cmd, "rm") == 0) {
+            printf("LORD ABS SAYS THIS IS NOT DONE YET SO WE WILL PUT THIS PRINT STATEMENT HERE AND JORK IT UNTIL HE DECREES OTHERWISE! ALL HAIL LORD ABS, PATRON OF THE CHUDS!!!\n");
             if(args[1] == NULL){
-                printf("rm: no arguements provided\n");
+                printf("rm: no arguments provided\n");
             } else if (remove(args[1]) != 0) {
                 printf("failed to remove file: %s\n", args[1]);
             }
 
         } else if (strcmp(cmd, "mv") == 0) {
             if (args[1] == NULL || args[2] == NULL) {
-                printf("mv: no arguements provided\n");
-            }
-            strcat(args[2], "/");
-            strcat(args[2], args[1]);
-            if (rename(args[1], args[2]) != 0){
-                printf("failed to move file\n");
-            }
+                printf("mv: no arguments provided\n");
+            } else {
+                char newpath[1024];
 
+                char *base = basename(args[1]);
+
+                snprintf(newpath, sizeof(newpath), "%s/%s", args[2], base);
+
+                if (rename(args[1], newpath) != 0) {
+                    printf("failed to move file: %s\n", args[1]);
+                }
+            }
         } else if (strcmp(cmd, "logout") == 0) {
             destroy_session(session);
             free(input);
