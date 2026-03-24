@@ -2,6 +2,5 @@
 #include "example.c"
 
 int main(void){
-  test();
-  // server_loop();
+  server_loop();
 }

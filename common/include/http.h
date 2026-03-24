@@ -1,3 +1,5 @@
+#ifndef HTTP_H
+#define HTTP_H
 #include "llhttp.h"
 
 #define HTTP_MAX_METHOD_LEN 16
@@ -14,6 +16,7 @@
   (HTTP_MAX_METHOD_LEN + HTTP_MAX_PATH_LEN + HTTP_MAX_QUERY_LEN + \
    HTTP_MAX_VERSION_LEN)
 #define HTTP_MAX_HEADER_LEN (HTTP_MAX_HEADER_NAME + HTTP_MAX_HEADER_VALUE)
+#define HTTP_MAX_PREAMBLE_LEN (HTTP_MAX_START_LEN + HTTP_MAX_HEADER_LEN * 5 + 2)
 
 typedef enum {
   UNKNOWN = 0,
@@ -78,6 +81,15 @@ typedef struct {
 } http_parse_ctx_t;
 
 /*
+ * @brief Init context object 
+ *
+ * @param ctx Context object 
+ *
+ * @return int error code. -1 if fail 0 if success
+ */
+int http_init_contex(http_parse_ctx_t* ctx);
+
+/*
  * @brief Setup the http parser, required before calling any other function
  *
  * Parser should live for the lifetime of your http session hence why it is
@@ -119,11 +131,16 @@ http_read_status_t http_parse_message(char* buf, size_t len, llhttp_t* parser,
                                       http_parse_ctx_t* ctx);
 
 /*
- * @brief Builds the http header from a http_message_t object 
+ * @brief Builds the http header from a http_message_t object
  *
- * @param 
+ * @param msg Message struct holding http metadata
+ * @param out Output buffer assumed size of HTTP_MAX_PREAMBLE_LEN
+ * @param type Enum type of message REQUEST or RESPONSE
+ * @param content_type Enum type of body NONE, JSON, or STREAM
+ *
+ * @return int Status code -1 fail 0 success
  */
-int http_build_header(const http_message_t* msg, char* out,
+int http_build_header(const http_message_t* msg, char out[HTTP_MAX_PREAMBLE_LEN],
                       http_message_type_t type,
                       http_content_type_t content_type);
 
@@ -146,3 +163,4 @@ int http_build_header(const http_message_t* msg, char* out,
  *
  * BODY // Same as what client sent
  */
+#endif

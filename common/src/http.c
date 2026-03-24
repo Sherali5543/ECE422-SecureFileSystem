@@ -194,6 +194,7 @@ int http_build_header(const http_message_t* msg, char* out,
   char start_line[HTTP_MAX_START_LEN];
 
   if (type == REQUEST) {
+    printf("REQUEST\n");
     char* method;
     switch (msg->method) {
       case GET:
@@ -212,6 +213,7 @@ int http_build_header(const http_message_t* msg, char* out,
       default:
         return -1;
     }
+    printf("Method: %s\n", method);
 
     if (strnlen(msg->query, HTTP_MAX_QUERY_LEN) > 0) {
       snprintf(start_line, HTTP_MAX_START_LEN, "%s %s?%s HTTP/1.1\r\n", method,
@@ -224,6 +226,7 @@ int http_build_header(const http_message_t* msg, char* out,
     snprintf(start_line, HTTP_MAX_START_LEN, "HTTP/1.1 %d %s\r\n",
              msg->status_code, msg->reason);
   }
+  printf("Start line: %s\n", start_line);
 
   // I'm going to assume all headers exist!
   char headers[HTTP_MAX_HEADER_LEN * 5];
@@ -247,11 +250,24 @@ int http_build_header(const http_message_t* msg, char* out,
       break;
   }
 
-  snprintf(out, HTTP_MAX_START_LEN + HTTP_MAX_HEADER_LEN * 5,
+  snprintf(out, HTTP_MAX_PREAMBLE_LEN,
            "%s"
            "%s"
            "\r\n",
            start_line, headers);
 
-  return 1;
+  printf("-----Constructed Message--------\n");
+  printf("%s\n", out);
+  return 0;
+}
+
+int http_init_contex(http_parse_ctx_t* ctx){
+  memset(ctx, 0, sizeof(*ctx));
+  ctx->msg = init_message_struct();
+  if(!ctx->msg){
+    fprintf(stderr, "alloc failed\n");
+    return -1;
+  }
+
+  return 0;
 }
