@@ -197,7 +197,6 @@ static int checklen(const char* str, size_t cap) {
     return 1;
   }
 
-  printf("Returning 0\n");
   return 0;
 }
 
