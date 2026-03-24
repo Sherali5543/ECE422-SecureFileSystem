@@ -40,6 +40,7 @@ static int commit_header(llhttp_t* parser) {
 static int append_buf(char* dst, size_t* dst_len, size_t cap, const char* src,
                       size_t src_len) {
   if (*dst_len + src_len >= cap) {
+    fprintf(stderr, "Append buf: Larger than cap\n");
     return -1;
   }
   memcpy(dst + *dst_len, src, src_len);
@@ -52,6 +53,7 @@ static int on_protocol(llhttp_t* parser, const char* at, size_t length) {
   (void)parser;
   (void)length;
   if (strncasecmp("HTTP", at, 4) != 0) {
+    fprintf(stderr, "On protocol: Incorrect protocol\n");
     return -1;
   }
 
@@ -69,6 +71,7 @@ static int on_version(llhttp_t* parser, const char* at, size_t length) {
   (void)parser;
   (void)length;
   if (strncasecmp("1.1", at, 3) != 0) {
+    fprintf(stderr, "On version: Incorrect version\n");
     return -1;
   }
 
@@ -113,6 +116,7 @@ static int on_headers_complete(llhttp_t* parser) {
         break;
       default:
         data->msg->method = UNKNOWN;
+        fprintf(stderr, "On method: unknown method\n");
         return -1;
     }
   }
@@ -188,13 +192,12 @@ http_read_status_t http_parse_message(char* buf, size_t len, llhttp_t* parser,
   return HTTP_READ_NEED_MORE;
 }
 
-int http_build_header(const http_message_t* msg, char* out,
+int http_build_header(const http_message_t* msg, char out[HTTP_MAX_PREAMBLE_LEN],
                       http_message_type_t type,
                       http_content_type_t content_type) {
   char start_line[HTTP_MAX_START_LEN];
 
   if (type == REQUEST) {
-    printf("REQUEST\n");
     char* method;
     switch (msg->method) {
       case GET:
@@ -213,7 +216,6 @@ int http_build_header(const http_message_t* msg, char* out,
       default:
         return -1;
     }
-    printf("Method: %s\n", method);
 
     if (strnlen(msg->query, HTTP_MAX_QUERY_LEN) > 0) {
       snprintf(start_line, HTTP_MAX_START_LEN, "%s %s?%s HTTP/1.1\r\n", method,
@@ -226,7 +228,6 @@ int http_build_header(const http_message_t* msg, char* out,
     snprintf(start_line, HTTP_MAX_START_LEN, "HTTP/1.1 %d %s\r\n",
              msg->status_code, msg->reason);
   }
-  printf("Start line: %s\n", start_line);
 
   // I'm going to assume all headers exist!
   char headers[HTTP_MAX_HEADER_LEN * 5];
@@ -256,8 +257,6 @@ int http_build_header(const http_message_t* msg, char* out,
            "\r\n",
            start_line, headers);
 
-  printf("-----Constructed Message--------\n");
-  printf("%s\n", out);
   return 0;
 }
 
