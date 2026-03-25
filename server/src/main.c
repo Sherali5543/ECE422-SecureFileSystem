@@ -1,6 +1,6 @@
-#include "server.c"
+#include "server.h"
 
-int main(void){
-  // Setup DB stuff - Wumbo this is probably you
+int main(void) {
   server_loop();
+  return 0;
 }
