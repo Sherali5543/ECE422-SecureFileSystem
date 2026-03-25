@@ -1,48 +1,49 @@
-#define _POSIX_C_SOURCE 200112L
 #include <stdlib.h>
-
+#include "http.h"
 #include "tls.h"
 
 // Example handler 
 // Sends get http request 
 // Server echos back. In actual code would not use total but with content length
 void do_something(SSL* ssl) {
-  const char* server_addr = getenv("SERVER_ADDR");
-  const char* request_start = "GET / HTTP/1.0\r\nConnection: close\r\nHost: ";
-  const char* request_end = "\r\n\r\n";
+  http_message_t msg = {
+    .method = GET,
+    .path = "/",
+    .connection = "close",
+    .content_length = 0,
+    .type = REQUEST
+  };
 
+  char buf[HTTP_MAX_PREAMBLE_LEN];
+  printf("Building message\n");
+  if(http_build_header(&msg, buf, REQUEST, NONE) <= 0){
+    printf("ERROR\n");
+    return;
+  }
   ssize_t nwritten = 0;
-  size_t total = 0;
 
-  nwritten = tls_write(ssl, (void*)request_start, strlen(request_start));
-  total += (size_t)nwritten;
-  if ((size_t)nwritten != strlen(request_start)) {
+  printf("Writing message\n");
+  nwritten = tls_write(ssl, (void*)buf, strlen(buf));
+  if ((size_t)nwritten != strlen(buf)) {
     printf("Error writing\n");
     return;
   }
 
-  nwritten = tls_write(ssl, (void*)server_addr, strlen(server_addr));
-  total += (size_t)nwritten;
-  if ((size_t)nwritten != strlen(server_addr)) {
-    printf("Error writing\n");
+  llhttp_t parser;
+  llhttp_settings_t settings;
+  http_parse_ctx_t ctx;
+  printf("Init Parser\n");
+  if (http_init_context(&ctx) != 0) {
+    printf("early return\n");
     return;
   }
+  http_parser_init(&parser, &settings, RESPONSE);
 
-  nwritten = tls_write(ssl, (void*)request_end, strlen(request_end));
-  total += (size_t)nwritten;
-  if ((size_t)nwritten != strlen(request_end)) {
-    printf("Error writing\n");
-    return;
-  }
-
-  char buf[160];
-  size_t received = 0;
-
-  while (received < total) {
-    size_t want = total - received;
-    if (want > sizeof(buf)) want = sizeof(buf);
-
-    ssize_t nread = tls_read(ssl, buf, want);
+  memset(buf, 0, sizeof(buf));
+  http_read_status_t read_status = HTTP_READ_NEED_MORE;
+  while (read_status == HTTP_READ_NEED_MORE) {
+    ssize_t nread = tls_read(ssl, buf, sizeof(buf));
+    read_status = http_parse_message(buf, sizeof(buf), &parser, &ctx);
     if (nread < 0) {
       printf("Error reading\n");
       return;
@@ -53,8 +54,15 @@ void do_something(SSL* ssl) {
     }
 
     fwrite(buf, 1, (size_t)nread, stdout);
-    received += (size_t)nread;
   }
+  printf("method = %d\n", ctx.msg->method );
+  printf("path = [%s]\n", ctx.msg->path);
+  printf("query = [%s]\n", ctx.msg->query);
+  printf("content_type = [%s]\n", ctx.msg->content_type);
+  printf("content_length = %zu\n", ctx.msg->content_length);
+  printf("connection = [%s]\n", ctx.msg->connection);
+  printf("auth = [%s]\n", ctx.msg->auth_token);
+  printf("Status code = %d\n", ctx.msg->status_code);
 
   printf("\n");
 }

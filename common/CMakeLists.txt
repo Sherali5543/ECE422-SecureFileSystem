@@ -2,9 +2,11 @@ find_package(PkgConfig REQUIRED)
 
 pkg_check_modules(SODIUM REQUIRED libsodium)
 pkg_check_modules(OPENSSL REQUIRED openssl)
+pkg_check_modules(LLHTTP REQUIRED libllhttp)
 
 add_library(common 
      src/tls.c
+     src/http.c
 #     # src/crypto.c
 #     # src/net.c
 #     # src/protocol.c
@@ -15,6 +17,7 @@ target_include_directories(common PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${SODIUM_INCLUDE_DIRS}
     ${OPENSSL_INCLUDE_DIRS}
+    ${LLHTTP_INCLUDE_DIRS}
 )
 
 target_link_directories(common PUBLIC
@@ -25,9 +28,11 @@ target_link_directories(common PUBLIC
 target_link_libraries(common PUBLIC
     ${SODIUM_LIBRARIES}
     ${OPENSSL_LIBRARIES}
+    ${LLHTTP_LIBRARIES}
+    # mysqlclient
 )
 
-target_compile_options(common PUBLIC
+target_compile_options(common PUBLIC 
     ${SODIUM_CFLAGS_OTHER}
     ${OPENSSL_CFLAGS_OTHER}
 )
