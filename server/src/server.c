@@ -55,7 +55,7 @@ void handle_client(SSL* ssl) {
   http_message_t* msg = read_request(ssl);
 
   printf("Handling request\n");
-  http_message_t* response = handle_request(msg);
+  http_message_t* response = handle_request(msg, ssl);
   free(msg); 
   if(response == NULL){
     printf("No response\n");

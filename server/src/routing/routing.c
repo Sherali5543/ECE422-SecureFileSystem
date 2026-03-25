@@ -18,7 +18,7 @@ void clean_response(http_message_t *msg){
   free(msg);
 }
 
-http_message_t *handle_request(http_message_t* msg) {
+http_message_t *handle_request(http_message_t* msg, SSL* ssl) {
   http_message_t *req = init_response();
 
   switch (msg->method) {
