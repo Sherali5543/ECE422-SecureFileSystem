@@ -1,5 +1,6 @@
 #include "file_utils.h"
 #include "encryption.h"
+#include "client.c"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -9,6 +10,7 @@
 
 
 void read_file(){
+    server_get_file();
     // using README as a demo
     FILE* fptr;
     fptr = fopen("../../README.md", "r");
@@ -25,6 +27,7 @@ void read_file(){
 }
 
 void write_file(){
+    server_get_file();
     // using README as a demo
     // TODO: actually have this work with the server
     bool can_write = true;
@@ -65,6 +68,7 @@ void create_file(char* filepath, char* filename, Session* s){
     wrapped = encrypt_wrapped_user_key(s->user_keys, file_key);
 
     unlink(encrypted_file);
+    server_upload_file();
 }
 
 void delete_file(){

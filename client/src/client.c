@@ -2,6 +2,95 @@
 #include "http.h"
 #include "tls.h"
 
+int server_send_msg(SSL *ssl, http_message_t *msg){
+  char buf[HTTP_MAX_PREAMBLE_LEN];
+
+    if (http_build_header(msg, buf, REQUEST) <= 0) {
+        return -1;
+    }
+
+    ssize_t nwritten = tls_write(ssl, buf, strlen(buf));
+    if (nwritten != (ssize_t)strlen(buf)) {
+        return -1;
+    }
+
+    return 0;
+}
+
+int server_recieve_response(SSL *ssl, http_parse_ctx_t *ctx) {
+    char buf[HTTP_MAX_PREAMBLE_LEN];
+
+    llhttp_t parser;
+    llhttp_settings_t settings;
+
+    http_parser_init(&parser, &settings, RESPONSE);
+
+    http_read_status_t status = HTTP_READ_NEED_MORE;
+
+    while (status == HTTP_READ_NEED_MORE) {
+        ssize_t nread = tls_read(ssl, buf, sizeof(buf));
+
+        if (nread < 0) return -1;
+        if (nread == 0) return -1;
+
+        status = http_parse_message(buf, sizeof(buf), &parser, ctx);
+        fwrite(buf, 1, (size_t)nread, stdout);
+    }
+
+    return 0;
+}
+
+int server_upload_file(SSL* ssl, char* path){
+  http_message_t msg = {
+    .method = POST,
+    .path = "/", // endpoint
+    .connection = "close",
+    .content_length = 0,
+    .type = REQUEST,
+    .content_type = NONE
+  };
+
+  if (server_send_msg(ssl, &msg) != 0) {
+        printf("send failed\n");
+        return -1;
+  }
+
+  http_parse_ctx_t ctx;
+  if (http_init_context(&ctx) != 0) {
+      return -1;
+  }
+
+  if (server_recieve_response(ssl, &ctx) != 0) {
+        printf("receive failed\n");
+        return -1;
+  }
+  
+  // the response is in ctx, you have to make sure to read that
+  free(ctx.msg);
+}
+
+void server_get_file(){
+  http_message_t msg = {
+    .method = GET,
+    .path = "/",
+    .connection = "close",
+    .content_length = 0,
+    .type = REQUEST,
+    .content_type = NONE
+  };
+}
+
+int server_update_file(){
+  http_message_t msg = {
+    .method = PATCH,
+    .path = "/",
+    .connection = "close",
+    .content_length = 0,
+    .type = REQUEST,
+    .content_type = NONE
+  };
+}
+
 // Example handler 
 // Sends get http request 
 // Server echos back. In actual code would not use total but with content length
