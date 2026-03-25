@@ -1,8 +1,14 @@
 #include "file_utils.h"
 #include "encryption.h"
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdbool.h>
+#include <unistd.h>
 
-void read_file(char* filepath){
-    // assume file is decrypted ATM
+
+
+void read_file(){
     // using README as a demo
     FILE* fptr;
     fptr = fopen("../../README.md", "r");
@@ -18,10 +24,9 @@ void read_file(char* filepath){
     fclose(fptr);
 }
 
-void write_file(char* filepath){
-    // TODO: for now assume we always are allowed to write
-    // however we probably need to add communication with the server
-    // to verify the user is allowed to write before we let them
+void write_file(){
+    // using README as a demo
+    // TODO: actually have this work with the server
     bool can_write = true;
 
     if(can_write){
@@ -33,8 +38,33 @@ void write_file(char* filepath){
     }
 }
 
-void create_file(){
+void create_file(char* filepath, char* filename, Session* s){
+    // Defaults perms for the file will only allow owner to access it
+    char template[] = "/tmp/sfs_create_XXXXXX";
+    int fd = mkstemp(template);
 
+    if (fd == -1) {
+        perror("mkstemp");
+        return;
+    }
+    close(fd); 
+
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "vi %s", template);
+    system(cmd);
+
+    // encrypt the file
+    char *file_key = NULL;
+    char *encrypted_file = NULL;
+    file_key = generate_file_key();
+    encrypted_file = encrypt_file(file_key, template);
+    unlink(template);
+
+    // wrap file key with user key
+    char* wrapped = NULL;
+    wrapped = encrypt_wrapped_user_key(s->user_keys, file_key);
+
+    unlink(encrypted_file);
 }
 
 void delete_file(){
