@@ -1,46 +1,6 @@
 #include "http.h"
 #include "tls.h"
-
-void parse_request(http_message_t* msg) {
-  switch (msg->method) {
-    case GET:
-      if (strncmp(msg->path, "/files", HTTP_MAX_PATH_LEN) == 0) {
-        // Handle ls/cd files
-      } else if (strncmp(msg->path, "/files/contents", HTTP_MAX_PATH_LEN) ==
-                 0) {
-        // Handle read files
-      }
-    case POST:
-      if (strncmp(msg->path, "/auth/login", HTTP_MAX_PATH_LEN) == 0) {
-        // Handle login
-      } else if(strncmp(msg->path, "/auth/register", HTTP_MAX_PATH_LEN) == 0){
-        // Handle registration
-      } else if(strncmp(msg->path, "/auth/logout", HTTP_MAX_PATH_LEN) == 0){
-        // Handle logout
-      }else if(strncmp(msg->path, "/files/move", HTTP_MAX_PATH_LEN) == 0){
-        // Handle mv
-      }else if(strncmp(msg->path, "/directories", HTTP_MAX_PATH_LEN) == 0){
-        // Handle mkdir
-      }else if(strncmp(msg->path, "/files", HTTP_MAX_PATH_LEN) == 0){
-        // Handle create file
-      }
-    case PUT:
-      if(strncmp(msg->path, "/files/content", HTTP_MAX_PATH_LEN) == 0){
-        // Handle write file
-      } 
-    case PATCH:
-      if(strncmp(msg->path, "/files/permissions", HTTP_MAX_PATH_LEN) == 0){
-        // Handle perm change
-      }
-    case DELETE:
-      if(strncmp(msg->path, "/files", HTTP_MAX_PATH_LEN) == 0){
-        // Handle rm
-      }
-    case UNKNOWN:
-    default:
-      return;
-  }
-}
+#include "routing.h"
 
 // Just here for testing
 void test_read_message_contents(http_parse_ctx_t ctx) {
@@ -65,6 +25,7 @@ http_message_t* read_request(SSL* ssl) {
   http_parser_init(&parser, &settings, REQUEST);
 
   char buf[HTTP_MAX_PREAMBLE_LEN];
+  memset(buf, 0, sizeof(buf));
   ssize_t nread = 0;
   http_read_status_t read_status = HTTP_READ_NEED_MORE;
   while (read_status == HTTP_READ_NEED_MORE) {
@@ -75,20 +36,35 @@ http_message_t* read_request(SSL* ssl) {
 
   test_read_message_contents(ctx);
   memset(buf, 0, sizeof(buf));
+
   return ctx.msg;
 }
+
+void send_response(SSL* ssl, http_message_t *response){
+  char buf[HTTP_MAX_PREAMBLE_LEN];
+  memset(buf, 0, HTTP_MAX_PREAMBLE_LEN);
+  ssize_t header_len = http_build_header(response, buf, RESPONSE, JSON);
+  if (header_len < 0) return;
+  ssize_t nwritten = tls_write(ssl, buf, (size_t)header_len);
+  if (nwritten <= 0) return;
+  fprintf(stderr, "Client connection closed %zu bytes sent\n", nwritten);
+}
+
 // Replace this with whatever
 void handle_client(SSL* ssl) {
+  printf("Reading request\n");
   http_message_t* msg = read_request(ssl);
 
-  parse_request(msg);
-  ctx.msg->status_code = 200;
-  ssize_t header_len = http_build_header(ctx.msg, buf, RESPONSE, NONE);
-  if (header_len < 0) return;
-  nwritten = tls_write(ssl, buf, (size_t)header_len);
-  if (nwritten <= 0) return;
-  total += (size_t)nwritten;
-  fprintf(stderr, "Client connection closed %zu bytes sent\n", total);
+  printf("Handling request\n");
+  http_message_t* response = handle_request(msg);
+  free(msg); 
+  if(response == NULL){
+    printf("No response\n");
+    return; // Shouldn't actually happen
+  }
+  printf("Sending response\n");
+  send_response(ssl, response);
+  clean_response(response);
 }
 
 void server_loop(void) {

@@ -63,6 +63,7 @@ void do_something(SSL* ssl) {
   printf("connection = [%s]\n", ctx.msg->connection);
   printf("auth = [%s]\n", ctx.msg->auth_token);
   printf("Status code = %d\n", ctx.msg->status_code);
+  free(ctx.msg);
 
   printf("\n");
 }
