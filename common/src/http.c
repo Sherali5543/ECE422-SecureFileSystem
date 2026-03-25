@@ -175,10 +175,17 @@ http_message_t* init_message_struct(void) {
 http_read_status_t http_parse_message(char* buf, size_t len, llhttp_t* parser,
                                       http_parse_ctx_t* context) {
   parser->data = context;
+  context->parsed_bytes = 0;
 
   enum llhttp_errno err = llhttp_execute(parser, buf, len);
 
   if (err == HPE_PAUSED) {
+    const char* error_pos = llhttp_get_error_pos(parser);
+    if (error_pos != NULL && error_pos >= buf) {
+      context->parsed_bytes = (size_t)(error_pos - buf);
+    } else {
+      context->parsed_bytes = len;
+    }
     return HTTP_READ_HEADERS_COMPLETE;
   }
 

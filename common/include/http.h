@@ -71,6 +71,7 @@ typedef struct {
 
   char url[HTTP_MAX_QUERY_LEN];
   size_t current_url_len;
+  size_t parsed_bytes;
 
   char current_header_name[HTTP_MAX_HEADER_NAME];
   size_t current_header_name_len;

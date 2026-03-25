@@ -143,7 +143,7 @@ int db_create_user(server_context_t* ctx, const char* username,
   sqlite3* db = db_handle(ctx);
 
   if (db == NULL || username == NULL || password_hash == NULL ||
-      public_key == NULL || public_key_len == 0) {
+      public_key == NULL) {
     return -1;
   }
 
@@ -153,10 +153,18 @@ int db_create_user(server_context_t* ctx, const char* username,
 
   if (sqlite3_bind_text(stmt, 1, username, -1, SQLITE_TRANSIENT) != SQLITE_OK ||
       sqlite3_bind_text(stmt, 2, password_hash, -1, SQLITE_TRANSIENT) !=
-          SQLITE_OK ||
-      sqlite3_bind_blob(stmt, 3, public_key, (int)public_key_len,
-                        SQLITE_TRANSIENT) != SQLITE_OK) {
+          SQLITE_OK) {
     fprintf(stderr, "db_create_user: bind failed: %s\n", sqlite3_errmsg(db));
+    return finish_statement(stmt, -1);
+  }
+
+  if ((public_key_len == 0 &&
+       sqlite3_bind_zeroblob(stmt, 3, 0) != SQLITE_OK) ||
+      (public_key_len > 0 &&
+       sqlite3_bind_blob(stmt, 3, public_key, (int)public_key_len,
+                         SQLITE_TRANSIENT) != SQLITE_OK)) {
+    fprintf(stderr, "db_create_user: public key bind failed: %s\n",
+            sqlite3_errmsg(db));
     return finish_statement(stmt, -1);
   }
 
