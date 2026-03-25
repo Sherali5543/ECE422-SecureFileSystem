@@ -60,13 +60,6 @@ char* generate_file_hash(char* filepath);
 // it with the user's signing keys
 char* generate_hash_signature(char* hash, SignKeys* sign_keys);
 
-// decrypts the hash signature using the signer's public key
-// returns:
-// - the file's hash if legitimate
-// - nothing if signing failed
-char* decrypt_hash_signature(char* signature, char* signer_public_key);
-
-
 // decrypts the specified file using the given file key
 //
 // returns the filepath to the encrypted temp file
