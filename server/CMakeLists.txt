@@ -4,6 +4,7 @@
 
 add_executable(server
     src/main.c
+    src/encryption.c
     src/routing/routing.c
     # src/auth.c
     # src/routes.c
