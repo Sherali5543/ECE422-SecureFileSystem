@@ -30,10 +30,14 @@ Session login(SSL* ssl) {
   printf("Sending password\n");
   send_request(ssl, msg);
   tls_write(ssl, body, strlen(body));
-  read_response(ssl);
+  destroy_message(msg);
+  free(body);
+  cJSON_Delete(json);
+  printf("reading response\n");
+  msg = read_response(ssl);
+  free(msg);
   printf("\nOk, ill take your word for it! (Password we read was: %s)\n", pwd);
   setStdinEcho(true);
-  destroy_message(msg);
 
   Session s;
   s.id = 0;
