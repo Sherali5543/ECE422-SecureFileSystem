@@ -116,8 +116,7 @@ int db_find_user_by_username(server_context_t* ctx, const char* username,
   const void* db_public_key = sqlite3_column_blob(stmt, 3);
   int db_public_key_len = sqlite3_column_bytes(stmt, 3);
 
-  if (db_username == NULL || db_password_hash == NULL || db_public_key == NULL ||
-      db_public_key_len < 0 ||
+  if (db_username == NULL || db_password_hash == NULL || db_public_key_len < 0 ||
       (size_t)db_public_key_len > sizeof(out_user->public_key)) {
     fprintf(stderr, "db_find_user_by_username: invalid row contents\n");
     return finish_statement(stmt, -1);
@@ -127,7 +126,13 @@ int db_find_user_by_username(server_context_t* ctx, const char* username,
           sizeof(out_user->username) - 1);
   strncpy(out_user->password_hash, (const char*)db_password_hash,
           sizeof(out_user->password_hash) - 1);
-  memcpy(out_user->public_key, db_public_key, (size_t)db_public_key_len);
+  if (db_public_key_len > 0) {
+    if (db_public_key == NULL) {
+      fprintf(stderr, "db_find_user_by_username: missing public key blob data\n");
+      return finish_statement(stmt, -1);
+    }
+    memcpy(out_user->public_key, db_public_key, (size_t)db_public_key_len);
+  }
   out_user->public_key_len = (size_t)db_public_key_len;
 
   return finish_statement(stmt, 1);
