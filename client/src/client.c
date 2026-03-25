@@ -1,9 +1,10 @@
 #include <stdlib.h>
+
 #include "http.h"
 #include "tls.h"
 
-// Example handler 
-// Sends get http request 
+// Example handler
+// Sends get http request
 // Server echos back. In actual code would not use total but with content length
 void do_something(SSL* ssl) {
   http_message_t msg = {
@@ -56,7 +57,7 @@ void do_something(SSL* ssl) {
 
     fwrite(buf, 1, (size_t)nread, stdout);
   }
-  printf("method = %d\n", ctx.msg->method );
+  printf("method = %d\n", ctx.msg->method);
   printf("path = [%s]\n", ctx.msg->path);
   printf("query = [%s]\n", ctx.msg->query);
   printf("content_type = [%u]\n", ctx.msg->content_type);
@@ -69,20 +70,22 @@ void do_something(SSL* ssl) {
   printf("\n");
 }
 
-void connect_to_server(void) {
-  const char* ca_cert = getenv("CA_CERT");
-  const char* server_addr = getenv("SERVER_ADDR");
-  const char* server_port = getenv("SERVER_PORT");
-
-  SSL_CTX* ctx = tls_client_config(ca_cert);
-  SSL* ssl = tls_client_connect(ctx, server_addr, server_port);
-
-  do_something(ssl);
-
+void disconnect_server(SSL* ssl, SSL_CTX *ctx) {
   int ret = SSL_shutdown(ssl);
   if (ret < 0) {
     printf("Error closing\n");
   }
   SSL_free(ssl);
   tls_cleanup(ctx, NULL);
+}
+
+SSL_CTX* setup_client(void) {
+  const char* ca_cert = getenv("CA_CERT");
+  return tls_client_config(ca_cert);
+}
+
+SSL* connect_to_server(SSL_CTX*ctx) {
+  const char* server_addr = getenv("SERVER_ADDR");
+  const char* server_port = getenv("SERVER_PORT");
+  return tls_client_connect(ctx, server_addr, server_port);
 }
