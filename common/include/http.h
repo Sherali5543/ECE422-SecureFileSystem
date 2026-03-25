@@ -43,7 +43,6 @@ typedef struct {
 
   int status_code;
 
-  // char content_type[HTTP_MAX_HEADER_VALUE];
   http_content_type_t content_type;
   size_t content_length;
   char connection[HTTP_MAX_HEADER_VALUE];
