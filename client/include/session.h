@@ -1,5 +1,6 @@
 #ifndef SESSION
 #define SESSION
+#include "tls.h"
 
 typedef struct{
     int id;
@@ -12,7 +13,7 @@ typedef struct{
  * 
  * @return Session* 
  */
-Session login();
+Session login(SSL* ssl);
 
 /**
  * @brief Deallocates memory associated with a session
