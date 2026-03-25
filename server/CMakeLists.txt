@@ -1,15 +1,21 @@
-# find_package(PkgConfig REQUIRED)
-#
-# pkg_check_modules(SQLITE REQUIRED sqlite3)
+find_package(SQLite3 REQUIRED)
 
 add_executable(server
     src/main.c
-    # src/auth.c
-    # src/routes.c
-    # src/storage.c
+    src/server_context.c
+    src/auth.c
+    src/routes.c
+    src/storage.c
+    src/permissions.c
+    src/db/db.c
+    src/db/schema_helper.c
 )
 
 target_link_libraries(server PRIVATE
   common
-#   ${SQLITE_LIBRARIES}
+  SQLite::SQLite3
+)
+
+target_include_directories(server PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
 )

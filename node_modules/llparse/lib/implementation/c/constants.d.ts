@@ -1,0 +1,16 @@
+export declare const CONTAINER_KEY = "c";
+export declare const LABEL_PREFIX = "";
+export declare const STATE_PREFIX = "s_n_";
+export declare const STATE_ERROR = "s_error";
+export declare const BLOB_PREFIX = "llparse_blob";
+export declare const ARG_STATE = "state";
+export declare const ARG_POS = "p";
+export declare const ARG_ENDPOS = "endp";
+export declare const VAR_MATCH = "match";
+export declare const SEQUENCE_COMPLETE = "kMatchComplete";
+export declare const SEQUENCE_MISMATCH = "kMatchMismatch";
+export declare const SEQUENCE_PAUSE = "kMatchPause";
+export declare const SIGNED_LIMITS: Map<string, [string, string]>;
+export declare const UNSIGNED_LIMITS: Map<string, [string, string]>;
+export declare const UNSIGNED_TYPES: Map<string, string>;
+export declare const SIGNED_TYPES: Map<string, string>;

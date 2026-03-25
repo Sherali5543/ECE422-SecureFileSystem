@@ -1,0 +1,1 @@
+{"version":3,"file":"mul-add.js","sourceRoot":"","sources":["../../src/code/mul-add.ts"],"names":[],"mappings":";;;AAAA,mCAAgC;AAuBhC,MAAa,MAAO,SAAQ,aAAK;IAC/B,YAAY,KAAa,EAAkB,OAAuB;QAChE,KAAK,CAAC,OAAO,EAAE,SAAS,EAAE,KAAK,CAAC,CAAC;QADQ,YAAO,GAAP,OAAO,CAAgB;IAElE,CAAC;CACF;AAJD,wBAIC"}

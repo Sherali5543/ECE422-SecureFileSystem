@@ -1,0 +1,1 @@
+{"version":3,"file":"or.js","sourceRoot":"","sources":["../../../../src/implementation/c/code/or.ts"],"names":[],"mappings":";;;AAGA,mCAAgC;AAEhC,MAAa,EAAG,SAAQ,aAAuB;IACnC,OAAO,CAAC,GAAgB,EAAE,GAAa;QAC/C,GAAG,CAAC,IAAI,CAAC,GAAG,IAAI,CAAC,KAAK,CAAC,GAAG,CAAC,OAAO,IAAI,CAAC,GAAG,CAAC,KAAK,GAAG,CAAC,CAAC;QACrD,GAAG,CAAC,IAAI,CAAC,WAAW,CAAC,CAAC;IACxB,CAAC;CACF;AALD,gBAKC"}

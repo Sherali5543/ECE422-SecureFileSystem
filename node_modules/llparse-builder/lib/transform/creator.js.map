@@ -1,0 +1,1 @@
+{"version":3,"file":"creator.js","sourceRoot":"","sources":["../../src/transform/creator.ts"],"names":[],"mappings":";;;AACA,yCAAqC;AACrC,uDAAkD;AAElD;;;;;GAKG;AACH,MAAa,OAAO;IAClB;;;;;OAKG;IACI,aAAa;QAClB,OAAO,IAAI,+BAAa,EAAE,CAAC;IAC7B,CAAC;IAED;;OAEG;IACI,OAAO;QACZ,OAAO,IAAI,kBAAO,EAAE,CAAC;IACvB,CAAC;CACF;AAjBD,0BAiBC"}

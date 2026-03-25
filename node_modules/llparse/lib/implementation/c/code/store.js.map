@@ -1,0 +1,1 @@
+{"version":3,"file":"store.js","sourceRoot":"","sources":["../../../../src/implementation/c/code/store.ts"],"names":[],"mappings":";;;AAGA,mCAAgC;AAEhC,MAAa,KAAM,SAAQ,aAA0B;IACzC,OAAO,CAAC,GAAgB,EAAE,GAAa;QAC/C,GAAG,CAAC,IAAI,CAAC,GAAG,IAAI,CAAC,KAAK,CAAC,GAAG,CAAC,MAAM,GAAG,CAAC,QAAQ,EAAE,GAAG,CAAC,CAAC;QACpD,GAAG,CAAC,IAAI,CAAC,WAAW,CAAC,CAAC;IACxB,CAAC;CACF;AALD,sBAKC"}
