@@ -22,10 +22,11 @@
 
 typedef enum {
   UNKNOWN = 0,
-  GET = 1,
-  POST = 2,
-  PUT = 3,
-  DELETE = 4,
+  GET,
+  POST,
+  PUT,
+  PATCH,
+  DELETE,
 } http_method_t;
 
 typedef enum { NONE = 0, JSON, STREAM } http_content_type_t;

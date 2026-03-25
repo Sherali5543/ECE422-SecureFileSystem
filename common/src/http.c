@@ -110,6 +110,9 @@ static int on_headers_complete(llhttp_t* parser) {
       case HTTP_PUT:
         data->msg->method = PUT;
         break;
+      case HTTP_PATCH:
+        data->msg->method = PATCH;
+        break;
       case HTTP_DELETE:
         data->msg->method = DELETE;
         break;
@@ -217,6 +220,9 @@ ssize_t http_build_header(const http_message_t* msg,
         break;
       case PUT:
         method = "PUT";
+        break;
+      case PATCH:
+        method = "PATCH";
         break;
       case DELETE:
         method = "DELETE";
