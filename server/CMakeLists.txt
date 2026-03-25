@@ -4,6 +4,7 @@
 
 add_executable(server
     src/main.c
+    src/routing/routing.c
     # src/auth.c
     # src/routes.c
     # src/storage.c
@@ -11,5 +12,8 @@ add_executable(server
 
 target_link_libraries(server PRIVATE
   common
-#   ${SQLITE_LIBRARIES}
+)
+
+target_include_directories(server PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
