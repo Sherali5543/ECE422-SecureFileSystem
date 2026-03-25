@@ -37,7 +37,6 @@ UserKeys* generate_read_keypair(char* username, char* password){
     return kp;
 }
 
-
 SignKeys* generate_signing_keypair(char* username, char* password){
     SignKeys* kp = malloc(sizeof(SignKeys));
 
@@ -134,7 +133,6 @@ char* decrypt_file_group_key(char* group_key, char* encrypted_key){
     return unwrapped_key;
 }
 
-
 char* generate_file_hash(char* filepath){
     char* hash = malloc(crypto_generichash_BYTES);
 
@@ -162,28 +160,13 @@ char* generate_file_hash(char* filepath){
 }
 
 
-char* generate_hash_signature(char* filepath, SignKeys* sign_keys){
-    char* hash = generate_file_hash(filepath);
 
+char* generate_hash_signature(char* hash, SignKeys* sign_keys){
     char* signature = malloc(crypto_sign_BYTES + crypto_generichash_BYTES);
 
     crypto_sign((unsigned char*) signature, NULL, (unsigned char *)hash, crypto_generichash_BYTES,(sign_keys->secret_key));
 
     return signature;
-}
-
-
-char* decrypt_hash_signature(char* signature, char* signer_public_key){
-    char* hash = malloc(crypto_generichash_BYTES);
-
-    if(crypto_sign_open((unsigned char *) hash, NULL,
-                            (const unsigned char *) signature, 
-                            crypto_sign_BYTES + crypto_generichash_BYTES, 
-                            (const unsigned char *) signer_public_key) != 0){
-        return NULL;
-    }
-
-    return hash;
 }
 
 
@@ -267,7 +250,7 @@ char* decrypt_file(char* file_key, char* filepath){
 
     read(fd, header, crypto_secretstream_xchacha20poly1305_HEADERBYTES);
 
-    char* temp_filename = strdup("/tmp/sfs_encrypt_XXXXXX");
+    char* temp_filename = strdup("/tmp/sfs_decrypt_XXXXXX");
     crypto_secretstream_xchacha20poly1305_state state;
 
     int temp_fd = mkstemp(temp_filename);
