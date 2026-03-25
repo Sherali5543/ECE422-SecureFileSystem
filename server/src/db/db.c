@@ -147,11 +147,11 @@ static int copy_blob_value(const void* value, int value_len,
 
 static int load_user_from_stmt(sqlite3_stmt* stmt, db_user_t* out_user) {
   const unsigned char* db_username = NULL;
-  const unsigned char* db_password_hash = NULL;
-  const void* db_public_key = NULL;
+  const void* db_public_encryption_key = NULL;
+  const void* db_public_signing_key = NULL;
   int username_len = 0;
-  int password_hash_len = 0;
-  int public_key_len = 0;
+  int public_encryption_key_len = 0;
+  int public_signing_key_len = 0;
 
   if (out_user == NULL) {
     return -1;
@@ -162,19 +162,22 @@ static int load_user_from_stmt(sqlite3_stmt* stmt, db_user_t* out_user) {
 
   db_username = sqlite3_column_text(stmt, 1);
   username_len = sqlite3_column_bytes(stmt, 1);
-  db_password_hash = sqlite3_column_text(stmt, 2);
-  password_hash_len = sqlite3_column_bytes(stmt, 2);
-  db_public_key = sqlite3_column_blob(stmt, 3);
-  public_key_len = sqlite3_column_bytes(stmt, 3);
+  db_public_encryption_key = sqlite3_column_blob(stmt, 2);
+  public_encryption_key_len = sqlite3_column_bytes(stmt, 2);
+  db_public_signing_key = sqlite3_column_blob(stmt, 3);
+  public_signing_key_len = sqlite3_column_bytes(stmt, 3);
 
   if (copy_text_value(db_username, username_len, out_user->username,
                       sizeof(out_user->username), "load_user_from_stmt") != 0 ||
-      copy_text_value(db_password_hash, password_hash_len,
-                      out_user->password_hash,
-                      sizeof(out_user->password_hash),
+      copy_blob_value(db_public_encryption_key, public_encryption_key_len,
+                      out_user->public_encryption_key,
+                      sizeof(out_user->public_encryption_key),
+                      &out_user->public_encryption_key_len,
                       "load_user_from_stmt") != 0 ||
-      copy_blob_value(db_public_key, public_key_len, out_user->public_key,
-                      sizeof(out_user->public_key), &out_user->public_key_len,
+      copy_blob_value(db_public_signing_key, public_signing_key_len,
+                      out_user->public_signing_key,
+                      sizeof(out_user->public_signing_key),
+                      &out_user->public_signing_key_len,
                       "load_user_from_stmt") != 0) {
     return -1;
   }
@@ -415,7 +418,7 @@ sqlite3* db_handle(server_context_t* ctx) {
 int db_find_user_by_username(server_context_t* ctx, const char* username,
                              db_user_t* out_user) {
   static const char sql[] =
-      "SELECT id, username, password_hash, public_key "
+      "SELECT id, username, public_encryption_key, public_signing_key "
       "FROM users WHERE username = ?1;";
   sqlite3_stmt* stmt = NULL;
   sqlite3* db = db_handle(ctx);
@@ -448,7 +451,7 @@ int db_find_user_by_username(server_context_t* ctx, const char* username,
 int db_find_user_by_id(server_context_t* ctx, int user_id,
                        db_user_t* out_user) {
   static const char sql[] =
-      "SELECT id, username, password_hash, public_key "
+      "SELECT id, username, public_encryption_key, public_signing_key "
       "FROM users WHERE id = ?1;";
   sqlite3_stmt* stmt = NULL;
   sqlite3* db = db_handle(ctx);
@@ -478,23 +481,29 @@ int db_find_user_by_id(server_context_t* ctx, int user_id,
 }
 
 int db_create_user(server_context_t* ctx, const char* username,
-                   const char* password_hash, const void* public_key,
-                   size_t public_key_len, int* out_user_id) {
+                   const void* public_encryption_key,
+                   size_t public_encryption_key_len,
+                   const void* public_signing_key,
+                   size_t public_signing_key_len,
+                   int* out_user_id) {
   static const char sql[] =
-      "INSERT INTO users (username, password_hash, public_key) "
+      "INSERT INTO users (username, public_encryption_key, public_signing_key) "
       "VALUES (?1, ?2, ?3);";
   sqlite3_stmt* stmt = NULL;
   sqlite3* db = db_handle(ctx);
 
-  if (db == NULL || username == NULL || password_hash == NULL ||
-      public_key == NULL) {
+  if (db == NULL || username == NULL || public_encryption_key == NULL ||
+      public_signing_key == NULL) {
     return -1;
   }
 
   if (prepare_statement(db, &stmt, sql) != 0 ||
       bind_text_value(db, stmt, 1, username, "db_create_user") != 0 ||
-      bind_text_value(db, stmt, 2, password_hash, "db_create_user") != 0 ||
-      bind_blob_value(db, stmt, 3, public_key, public_key_len,
+      bind_blob_value(db, stmt, 2, public_encryption_key,
+                      public_encryption_key_len,
+                      "db_create_user") != 0 ||
+      bind_blob_value(db, stmt, 3, public_signing_key,
+                      public_signing_key_len,
                       "db_create_user") != 0) {
     return finish_statement(stmt, -1);
   }

@@ -7,8 +7,8 @@
 #include "server_context.h"
 
 #define DB_USERNAME_MAX 128
-#define DB_PASSWORD_HASH_MAX 256
-#define DB_PUBLIC_KEY_MAX 512
+#define DB_PUBLIC_ENCRYPTION_KEY_MAX 512
+#define DB_PUBLIC_SIGNING_KEY_MAX 512
 #define DB_GROUP_NAME_MAX 128
 #define DB_FILE_PATH_MAX 1024
 #define DB_FILE_NAME_MAX 512
@@ -18,9 +18,10 @@
 typedef struct {
   int id;
   char username[DB_USERNAME_MAX];
-  char password_hash[DB_PASSWORD_HASH_MAX];
-  unsigned char public_key[DB_PUBLIC_KEY_MAX];
-  size_t public_key_len;
+  unsigned char public_encryption_key[DB_PUBLIC_ENCRYPTION_KEY_MAX];
+  size_t public_encryption_key_len;
+  unsigned char public_signing_key[DB_PUBLIC_SIGNING_KEY_MAX];
+  size_t public_signing_key_len;
 } db_user_t;
 
 typedef struct {
@@ -69,8 +70,11 @@ int db_find_user_by_username(server_context_t* ctx, const char* username,
 int db_find_user_by_id(server_context_t* ctx, int user_id,
                        db_user_t* out_user);
 int db_create_user(server_context_t* ctx, const char* username,
-                   const char* password_hash, const void* public_key,
-                   size_t public_key_len, int* out_user_id);
+                   const void* public_encryption_key,
+                   size_t public_encryption_key_len,
+                   const void* public_signing_key,
+                   size_t public_signing_key_len,
+                   int* out_user_id);
 
 int db_find_group_by_name(server_context_t* ctx, const char* group_name,
                           db_group_t* out_group);
