@@ -23,6 +23,7 @@ target_include_directories(common PUBLIC
 target_link_directories(common PUBLIC
     ${SODIUM_LIBRARY_DIRS}
     ${OPENSSL_LIBRARY_DIRS}
+    ${LLHTTP_LIBRARY_DIRS}
 )
 
 target_link_libraries(common PUBLIC
