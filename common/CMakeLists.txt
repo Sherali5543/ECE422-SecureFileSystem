@@ -7,6 +7,7 @@ pkg_check_modules(LLHTTP REQUIRED libllhttp)
 add_library(common 
      src/tls.c
      src/http.c
+     src/common_encryption.c
 #     # src/crypto.c
 #     # src/net.c
 #     # src/protocol.c
