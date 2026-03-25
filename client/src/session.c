@@ -17,6 +17,7 @@ Session login(){
     Session s;
     s.id = 0;
     s.username = username;
+    free(pwd);
 
     return s;
 }

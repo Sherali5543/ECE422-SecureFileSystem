@@ -11,12 +11,13 @@ void do_something(SSL* ssl) {
     .path = "/",
     .connection = "close",
     .content_length = 0,
-    .type = REQUEST
+    .type = REQUEST,
+    .content_type = NONE
   };
 
   char buf[HTTP_MAX_PREAMBLE_LEN];
   printf("Building message\n");
-  if(http_build_header(&msg, buf, REQUEST, NONE) <= 0){
+  if(http_build_header(&msg, buf, REQUEST) <= 0){
     printf("ERROR\n");
     return;
   }
@@ -58,11 +59,12 @@ void do_something(SSL* ssl) {
   printf("method = %d\n", ctx.msg->method );
   printf("path = [%s]\n", ctx.msg->path);
   printf("query = [%s]\n", ctx.msg->query);
-  printf("content_type = [%s]\n", ctx.msg->content_type);
+  printf("content_type = [%u]\n", ctx.msg->content_type);
   printf("content_length = %zu\n", ctx.msg->content_length);
   printf("connection = [%s]\n", ctx.msg->connection);
   printf("auth = [%s]\n", ctx.msg->auth_token);
   printf("Status code = %d\n", ctx.msg->status_code);
+  free(ctx.msg);
 
   printf("\n");
 }
