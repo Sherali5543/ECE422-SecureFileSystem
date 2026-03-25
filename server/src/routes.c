@@ -28,6 +28,9 @@ int route_request(server_context_t* ctx, const http_message_t* request,
   if (request->method == POST && strcmp(request->path, "/auth/register") == 0) {
     return auth_handle_register(ctx, request, response);
   }
+  if (request->method == POST && strcmp(request->path, "/auth/logout") == 0) {
+    return auth_handle_logout(ctx, request, response);
+  }
 
   if (auth_validate_token(ctx, request) != 0) {
     set_json_response(response, 401, "Unauthorized",

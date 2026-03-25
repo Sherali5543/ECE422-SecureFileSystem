@@ -189,8 +189,8 @@ static int auth_store_session(server_context_t* ctx, int user_id,
   return 0;
 }
 
-const server_session_t* auth_session_from_token(server_context_t* ctx,
-                                                const char* token) {
+static server_session_t* auth_mutable_session_from_token(server_context_t* ctx,
+                                                         const char* token) {
   size_t i = 0;
   time_t now = time(NULL);
 
@@ -213,6 +213,11 @@ const server_session_t* auth_session_from_token(server_context_t* ctx,
   }
 
   return NULL;
+}
+
+const server_session_t* auth_session_from_token(server_context_t* ctx,
+                                                const char* token) {
+  return auth_mutable_session_from_token(ctx, token);
 }
 
 int auth_handle_login(server_context_t* ctx, const http_message_t* request,
@@ -329,6 +334,33 @@ int auth_handle_register(server_context_t* ctx, const http_message_t* request,
 
   set_json_auth_success_response(response, 201, "Created", "registered", token,
                                  ctx->session_ttl_seconds);
+  return 0;
+}
+
+int auth_handle_logout(server_context_t* ctx, const http_message_t* request,
+                       http_message_t* response) {
+  server_session_t* session = NULL;
+
+  if (ctx == NULL || request == NULL || response == NULL) {
+    return -1;
+  }
+
+  if (request->method != POST) {
+    set_json_response(response, 405, "Method Not Allowed",
+                      "{\"error\":\"logout requires POST\"}");
+    return 0;
+  }
+
+  session = auth_mutable_session_from_token(ctx, request->auth_token);
+  if (session == NULL) {
+    set_json_response(response, 401, "Unauthorized",
+                      "{\"error\":\"missing or invalid auth token\"}");
+    return 0;
+  }
+
+  memset(session, 0, sizeof(*session));
+  response->auth_token[0] = '\0';
+  set_json_response(response, 200, "OK", "{\"status\":\"logged_out\"}");
   return 0;
 }
 

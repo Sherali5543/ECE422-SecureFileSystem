@@ -1,7 +1,6 @@
-#include "server.c"
-#include "example.c"
+#include "server.h"
 
-int main(void){
-  test();
-  // server_loop();
+int main(void) {
+  server_loop();
+  return 0;
 }

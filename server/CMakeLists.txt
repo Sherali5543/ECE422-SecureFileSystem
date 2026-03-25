@@ -2,6 +2,7 @@ find_package(SQLite3 REQUIRED)
 
 add_executable(server
     src/main.c
+    src/server.c
     src/server_context.c
     src/auth.c
     src/routes.c
