@@ -8,6 +8,7 @@ http_message_t *init_response(void){
   memset(msg, 0, sizeof(http_message_t));
   msg->type = RESPONSE;
   msg->status_code = 400;
+  msg->content_type = NONE;
   strncpy(msg->reason, "Bad command", sizeof(msg->reason));
   strncpy(msg->connection, "close", sizeof(msg->connection));
   return msg;

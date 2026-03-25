@@ -43,14 +43,11 @@ typedef struct {
 
   int status_code;
 
-  char content_type[HTTP_MAX_HEADER_VALUE];
+  // char content_type[HTTP_MAX_HEADER_VALUE];
+  http_content_type_t content_type;
   size_t content_length;
   char connection[HTTP_MAX_HEADER_VALUE];
   char auth_token[HTTP_MAX_TOKEN_LEN];
-
-  uint8_t body[HTTP_MAX_BODY_LEN];
-  size_t body_len;
-
 } http_message_t;
 
 typedef enum {
@@ -145,8 +142,7 @@ http_read_status_t http_parse_message(char* buf, size_t len, llhttp_t* parser,
  */
 ssize_t http_build_header(const http_message_t* msg,
                           char out[HTTP_MAX_PREAMBLE_LEN],
-                          http_message_type_t type,
-                          http_content_type_t content_type);
+                          http_message_type_t type);
 
 /* Request syntax
  * METHOD PATH?QUERY HTTP/1.1

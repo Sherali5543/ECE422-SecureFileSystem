@@ -7,7 +7,7 @@ void test_read_message_contents(http_parse_ctx_t ctx) {
   printf("method = %d\n", ctx.msg->method);
   printf("path = [%s]\n", ctx.msg->path);
   printf("query = [%s]\n", ctx.msg->query);
-  printf("content_type = [%s]\n", ctx.msg->content_type);
+  printf("content_type = [%u]\n", ctx.msg->content_type);
   printf("content_length = %zu\n", ctx.msg->content_length);
   printf("connection = [%s]\n", ctx.msg->connection);
   printf("auth = [%s]\n", ctx.msg->auth_token);
@@ -43,14 +43,13 @@ http_message_t* read_request(SSL* ssl) {
 void send_response(SSL* ssl, http_message_t *response){
   char buf[HTTP_MAX_PREAMBLE_LEN];
   memset(buf, 0, HTTP_MAX_PREAMBLE_LEN);
-  ssize_t header_len = http_build_header(response, buf, RESPONSE, JSON);
+  ssize_t header_len = http_build_header(response, buf, RESPONSE);
   if (header_len < 0) return;
   ssize_t nwritten = tls_write(ssl, buf, (size_t)header_len);
   if (nwritten <= 0) return;
   fprintf(stderr, "Client connection closed %zu bytes sent\n", nwritten);
 }
 
-// Replace this with whatever
 void handle_client(SSL* ssl) {
   printf("Reading request\n");
   http_message_t* msg = read_request(ssl);

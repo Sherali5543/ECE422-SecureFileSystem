@@ -11,9 +11,16 @@ static int commit_header(llhttp_t* parser) {
   assert(data->header_state == HTTP_HDR_VALUE);
 
   if (strcasecmp(data->current_header_name, "Content-Type") == 0) {
-    strncpy(data->msg->content_type, data->current_header_value,
-            sizeof(data->msg->content_type) - 1);
-    data->msg->content_type[sizeof(data->msg->content_type) - 1] = '\0';
+    if (strncmp(data->current_header_value, "application/json",
+                HTTP_MAX_HEADER_VALUE) == 0) {
+      data->msg->content_type = JSON;
+    } else if (strncmp(data->current_header_value, "application/octet-stream",
+                       HTTP_MAX_HEADER_VALUE) == 0) {
+      data->msg->content_type = STREAM;
+    } else {
+      data->msg->content_type = NONE;
+      return -1;
+    }
   } else if (strcasecmp(data->current_header_name, "Content-Length") == 0) {
     data->msg->content_length =
         (size_t)strtol(data->current_header_value, NULL, 10);
@@ -205,8 +212,7 @@ static int checklen(const char* str, size_t cap) {
 
 ssize_t http_build_header(const http_message_t* msg,
                           char out[HTTP_MAX_PREAMBLE_LEN],
-                          http_message_type_t type,
-                          http_content_type_t content_type) {
+                          http_message_type_t type) {
   char start_line[HTTP_MAX_START_LEN];
 
   if (type == REQUEST) {
@@ -253,7 +259,9 @@ ssize_t http_build_header(const http_message_t* msg,
 
   // I'm going to assume all headers exist!
   char headers[HTTP_MAX_HEADER_LEN * 5];
-  if (checklen(msg->auth_token, HTTP_MAX_HEADER_VALUE) || // Don't check content-length cuz ul >=0
+  if (checklen(
+          msg->auth_token,
+          HTTP_MAX_HEADER_VALUE) ||  // Don't check content-length cuz ul >=0
       checklen(msg->connection, HTTP_MAX_HEADER_VALUE))
     return -1;
 
@@ -264,7 +272,7 @@ ssize_t http_build_header(const http_message_t* msg,
                         msg->auth_token, msg->content_length, msg->connection);
   if (offset < 0 || (size_t)offset >= sizeof(headers)) return -1;
 
-  switch (content_type) {
+  switch (msg->content_type) {
     case JSON:
       snprintf(headers + offset, sizeof(headers) - (size_t)offset,
                "Content-type: application/json\r\n");
