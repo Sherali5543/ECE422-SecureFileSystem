@@ -1,8 +1,10 @@
 #include "auth.h"
 
 #include <ctype.h>
+#include <openssl/rand.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "db.h"
 
@@ -18,6 +20,22 @@ static void set_json_response(http_message_t* response, int status_code,
   response->body[sizeof(response->body) - 1] = '\0';
   response->body_len = strlen((char*)response->body);
   response->content_length = response->body_len;
+}
+
+static void set_json_auth_success_response(http_message_t* response,
+                                           int status_code,
+                                           const char* reason,
+                                           const char* status,
+                                           const char* token,
+                                           long expires_in_seconds) {
+  char json_body[HTTP_MAX_BODY_LEN];
+
+  snprintf(json_body, sizeof(json_body),
+           "{\"status\":\"%s\",\"token\":\"%s\",\"expires_in\":%ld}", status,
+           token, expires_in_seconds);
+  strncpy(response->auth_token, token, sizeof(response->auth_token) - 1);
+  response->auth_token[sizeof(response->auth_token) - 1] = '\0';
+  set_json_response(response, status_code, reason, json_body);
 }
 
 static int validate_json_auth_request(const http_message_t* request,
@@ -94,10 +112,114 @@ static int parse_json_string_field(const char* json, const char* key, char* out,
   return 0;
 }
 
+static int generate_session_token(char* out_token, size_t out_size) {
+  unsigned char random_bytes[16];
+  static const char hex[] = "0123456789abcdef";
+  size_t i = 0;
+
+  if (out_token == NULL || out_size < sizeof(random_bytes) * 2 + 1) {
+    return -1;
+  }
+
+  if (RAND_bytes(random_bytes, sizeof(random_bytes)) != 1) {
+    return -1;
+  }
+
+  for (i = 0; i < sizeof(random_bytes); ++i) {
+    out_token[i * 2] = hex[random_bytes[i] >> 4];
+    out_token[i * 2 + 1] = hex[random_bytes[i] & 0x0f];
+  }
+  out_token[sizeof(random_bytes) * 2] = '\0';
+
+  return 0;
+}
+
+static int auth_store_session(server_context_t* ctx, int user_id,
+                              const char* username, char* out_token,
+                              size_t out_token_size) {
+  size_t i = 0;
+  server_session_t* empty_slot = NULL;
+  time_t now = time(NULL);
+
+  if (ctx == NULL || username == NULL || out_token == NULL) {
+    return -1;
+  }
+  if (now == (time_t)-1) {
+    return -1;
+  }
+
+  for (i = 0; i < SERVER_MAX_SESSIONS; ++i) {
+    if (ctx->sessions[i].in_use && ctx->sessions[i].expires_at <= now) {
+      memset(&ctx->sessions[i], 0, sizeof(ctx->sessions[i]));
+    }
+    if (ctx->sessions[i].in_use &&
+        strcmp(ctx->sessions[i].username, username) == 0) {
+      if (generate_session_token(ctx->sessions[i].token,
+                                 sizeof(ctx->sessions[i].token)) != 0) {
+        return -1;
+      }
+      ctx->sessions[i].user_id = user_id;
+      ctx->sessions[i].expires_at = now + ctx->session_ttl_seconds;
+      strncpy(out_token, ctx->sessions[i].token, out_token_size - 1);
+      out_token[out_token_size - 1] = '\0';
+      return 0;
+    }
+    if (!ctx->sessions[i].in_use && empty_slot == NULL) {
+      empty_slot = &ctx->sessions[i];
+    }
+  }
+
+  if (empty_slot == NULL) {
+    return -1;
+  }
+
+  memset(empty_slot, 0, sizeof(*empty_slot));
+  empty_slot->in_use = 1;
+  empty_slot->user_id = user_id;
+  strncpy(empty_slot->username, username, sizeof(empty_slot->username) - 1);
+  if (generate_session_token(empty_slot->token, sizeof(empty_slot->token)) !=
+      0) {
+    empty_slot->in_use = 0;
+    return -1;
+  }
+  empty_slot->expires_at = now + ctx->session_ttl_seconds;
+
+  strncpy(out_token, empty_slot->token, out_token_size - 1);
+  out_token[out_token_size - 1] = '\0';
+  return 0;
+}
+
+const server_session_t* auth_session_from_token(server_context_t* ctx,
+                                                const char* token) {
+  size_t i = 0;
+  time_t now = time(NULL);
+
+  if (ctx == NULL || token == NULL || token[0] == '\0') {
+    return NULL;
+  }
+  if (now == (time_t)-1) {
+    return NULL;
+  }
+
+  for (i = 0; i < SERVER_MAX_SESSIONS; ++i) {
+    if (ctx->sessions[i].in_use && ctx->sessions[i].expires_at <= now) {
+      memset(&ctx->sessions[i], 0, sizeof(ctx->sessions[i]));
+      continue;
+    }
+    if (ctx->sessions[i].in_use &&
+        strcmp(ctx->sessions[i].token, token) == 0) {
+      return &ctx->sessions[i];
+    }
+  }
+
+  return NULL;
+}
+
 int auth_handle_login(server_context_t* ctx, const http_message_t* request,
                       http_message_t* response) {
   char username[DB_USERNAME_MAX];
   char password[DB_PASSWORD_HASH_MAX];
+  char token[SERVER_MAX_TOKEN_LEN];
   db_user_t user;
   int lookup_rc = 0;
 
@@ -138,8 +260,15 @@ int auth_handle_login(server_context_t* ctx, const http_message_t* request,
     return 0;
   }
 
-  strncpy(response->auth_token, user.username, sizeof(response->auth_token) - 1);
-  set_json_response(response, 200, "OK", "{\"status\":\"ok\"}");
+  if (auth_store_session(ctx, user.id, user.username, token, sizeof(token)) !=
+      0) {
+    set_json_response(response, 500, "Internal Server Error",
+                      "{\"error\":\"failed to create session\"}");
+    return 0;
+  }
+
+  set_json_auth_success_response(response, 200, "OK", "ok", token,
+                                 ctx->session_ttl_seconds);
   return 0;
 }
 
@@ -147,6 +276,7 @@ int auth_handle_register(server_context_t* ctx, const http_message_t* request,
                          http_message_t* response) {
   char username[DB_USERNAME_MAX];
   char password[DB_PASSWORD_HASH_MAX];
+  char token[SERVER_MAX_TOKEN_LEN];
   db_user_t existing_user;
   static const unsigned char empty_public_key[] = "";
   int lookup_rc = 0;
@@ -191,12 +321,17 @@ int auth_handle_register(server_context_t* ctx, const http_message_t* request,
     return 0;
   }
 
-  strncpy(response->auth_token, username, sizeof(response->auth_token) - 1);
-  set_json_response(response, 201, "Created", "{\"status\":\"registered\"}");
+  if (auth_store_session(ctx, user_id, username, token, sizeof(token)) != 0) {
+    set_json_response(response, 500, "Internal Server Error",
+                      "{\"error\":\"failed to create session\"}");
+    return 0;
+  }
+
+  set_json_auth_success_response(response, 201, "Created", "registered", token,
+                                 ctx->session_ttl_seconds);
   return 0;
 }
 
 int auth_validate_token(server_context_t* ctx, const http_message_t* request) {
-  (void)ctx;
-  return request->auth_token[0] == '\0' ? -1 : 0;
+  return auth_session_from_token(ctx, request->auth_token) == NULL ? -1 : 0;
 }
