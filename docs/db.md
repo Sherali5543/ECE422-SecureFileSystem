@@ -78,7 +78,7 @@ Transaction helpers return:
 
 ### `db_user_t`
 
-Represents a row from the `users` table, including `id`, `username`, `password_hash`, and the user's `public_key`.
+Represents a row from the `users` table, including `id`, `username`, `public_encryption_key`, and `public_signing_key`.
 
 ### `db_group_t`
 
@@ -127,9 +127,9 @@ Looks up a user by username and fills `out_user` if a row exists.
 
 Looks up a user by numeric ID and fills `out_user` if a row exists.
 
-#### `int db_create_user(server_context_t* ctx, const char* username, const char* password_hash, const void* public_key, size_t public_key_len, int* out_user_id);`
+#### `int db_create_user(server_context_t* ctx, const char* username, const void* public_encryption_key, size_t public_encryption_key_len, const void* public_signing_key, size_t public_signing_key_len, int* out_user_id);`
 
-Inserts a new user row and optionally returns the inserted user ID.
+Inserts a new user row with a username, public encryption key, and public signing key and optionally returns the inserted user ID.
 
 ### Groups
 
