@@ -1,8 +1,11 @@
 #ifndef COMMON_ENCRYPTION_H
 #define COMMON_ENCRYPTION_H
 
-// generates a hash string based off of the provided text
-char* generate_str_hash(char* text);
+#include <stdlib.h>
+
+// generates a hash string based off of the provided 
+// bytes buffer and its length 
+char* generate_bytes_hash(char* buf, size_t len);
 
 // decrypts a hash signature using the signer's public key
 // 

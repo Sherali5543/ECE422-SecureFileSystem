@@ -2,11 +2,11 @@
 #include <sodium.h>
 #include "common_encryption.h"
 
-char* generate_bytes_hash(char* text){
+char* generate_bytes_hash(char* buf, size_t len){
     char* hash = malloc(crypto_generichash_BYTES);
 
-    crypto_generichash((unsigned char *) hash, sizeof hash, 
-                        (const unsigned char *) text, strlen(text), NULL, 0);
+    crypto_generichash((unsigned char *) hash, crypto_generichash_BYTES, 
+                        (const unsigned char *) buf, (unsigned long long) len, NULL, 0);
 
     return hash;
 }
