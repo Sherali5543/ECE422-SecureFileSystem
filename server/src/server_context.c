@@ -1,5 +1,6 @@
 #include "server_context.h"
 
+#include <sodium.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,11 +13,16 @@ int server_context_init(server_context_t* ctx) {
     return -1;
   }
 
+  if (sodium_init() < 0) {
+    return -1;
+  }
+
   ctx->db_path = getenv("DB_PATH");
   ctx->schema_path = getenv("DB_SCHEMA");
   ctx->storage_root = getenv("STORAGE_ROOT");
   session_ttl_env = getenv("SESSION_TTL_SECONDS");
   ctx->db = NULL;
+  memset(&ctx->pending_login, 0, sizeof(ctx->pending_login));
   memset(ctx->sessions, 0, sizeof(ctx->sessions));
   ctx->session_ttl_seconds = SERVER_DEFAULT_SESSION_TTL_SECONDS;
 
@@ -38,17 +44,6 @@ int server_context_init(server_context_t* ctx) {
       ctx->session_ttl_seconds = ttl;
     }
   }
-  // example session
-  ctx->sessions[0].in_use = 1;
-  ctx->sessions[0].user_id = 1;
-  strncpy(ctx->sessions[0].username, "alice",
-          sizeof(ctx->sessions[0].username) - 1);
-  strncpy(ctx->sessions[0].token, "test-token-alice-123",
-          sizeof(ctx->sessions[0].token) - 1);
-  ctx->sessions[0].expires_at = time(NULL) + 24 * 60 * 60;
-
-  printf("Loaded test session for user '%s' with token '%s'\n",
-         ctx->sessions[0].username, ctx->sessions[0].token);
 
   return 0;
 }

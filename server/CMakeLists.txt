@@ -10,6 +10,7 @@ add_executable(server
     src/db/db.c
     src/db/schema_helper.c
     src/routing/routing.c
+    src/handlers/user_auth.c
     src/handlers/file_crud.c
     src/handlers/group_crud.c
 )
@@ -20,6 +21,20 @@ target_link_libraries(server PRIVATE
 )
 
 target_include_directories(server PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${SQLITE_INCLUDE_DIRS}
+)
+
+add_executable(seed_user
+    src/dev_seed_user.c
+)
+
+target_link_libraries(seed_user PRIVATE
+  ${SQLITE_LIBRARIES}
+  common
+)
+
+target_include_directories(seed_user PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${SQLITE_INCLUDE_DIRS}
 )
