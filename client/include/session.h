@@ -9,6 +9,8 @@ typedef struct{
     char* username;
     UserKeys* user_keys;
     SignKeys* sign_keys;
+    SSL* ssl;
+
 } Session;
 
 /**

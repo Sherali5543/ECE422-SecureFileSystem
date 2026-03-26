@@ -1,5 +1,9 @@
 #include "file_utils.h"
 #include "encryption.h"
+#include "http.h"
+#include "tls.h"
+#include "cjson/cJSON.h"
+
 #include "client.c"
 #include <stdlib.h>
 #include <stdio.h>
@@ -9,36 +13,47 @@
 
 
 
-void read_file(){
-    server_get_file();
-    // using README as a demo
-    FILE* fptr;
-    fptr = fopen("../../README.md", "r");
-    if(fptr == NULL){
-        printf("Failed to open file\n");
-        return;
-    }
+void read_file(char* path, Session* s){
+    // ask server for file
+    http_message_t* msg = init_request();
+    msg->method = GET;
+
+    char request_endpoint[256] = "/files/content?path=";
+    strcat(request_endpoint, path);
+    strncpy(msg->path, request_endpoint, HTTP_MAX_PATH_LEN);
+
+    send_request(s->ssl, msg);
+    tls_write(s->ssl, NULL, 0);
+    destroy_message(msg);
     
-    char line[256];
-    while(fgets(line, sizeof(line), fptr)){
-        printf("%s",line);
-    }
-    fclose(fptr);
+    //get back request
+    msg = read_response(s->ssl);
+    // decrypt file
+    
+    free(msg);
+
 }
 
-void write_file(){
-    server_get_file();
-    // using README as a demo
-    // TODO: actually have this work with the server
-    bool can_write = true;
+void write_file(char* path, Session* s){
+    // ask server for file
+    http_message_t* msg = init_request();
+    msg->method = GET;
 
-    if(can_write){
-        char editor[] = "vi ";
-        char filepath[] = "../../README.md";
-        strcat(editor, filepath);
+    char request_endpoint[256] = "/files/content?path=";
+    strcat(request_endpoint, path);
+    strncpy(msg->path, request_endpoint, HTTP_MAX_PATH_LEN);
 
-        system(editor);
-    }
+    send_request(s->ssl, msg);
+    tls_write(s->ssl, NULL, 0);
+    destroy_message(msg);
+    
+    //get back request
+    msg = read_response(s->ssl);
+    // decrypt file
+    
+    // create temp file and open it with the contents of the file
+
+    // send updated file to server
 }
 
 void create_file(char* filepath, char* filename, Session* s){
@@ -68,10 +83,43 @@ void create_file(char* filepath, char* filename, Session* s){
     wrapped = encrypt_wrapped_user_key(s->user_keys, file_key);
 
     unlink(encrypted_file);
-    server_upload_file();
+
+    // send to server
+    http_message_t* msg = init_request();
+    msg->method = POST;
+    strncpy(msg->path, "/files", HTTP_MAX_PATH_LEN);
+    msg->content_type = JSON;
+    cJSON* json = cJSON_CreateObject();
+
+    cJSON_AddStringToObject(json, "path", );
+
+    char* body = cJSON_PrintUnformatted(json);
+    msg->content_length = strlen(body);
+
+    send_request(s->ssl, msg);
+    tls_write(s->ssl, body, strlen(body));
+    destroy_message(msg);
+    free(body);
+
+    msg = read_response(s->ssl);
+    free(msg);
+
+    // just need to read call back
 }
 
-void delete_file(){
+void delete_file(char* filepath, Session* s){
+    http_message_t* msg = init_request();
+    msg->method = DELETE;
 
+    char request_endpoint[256] = "/files?path=";
+    strcat(request_endpoint, filepath);
+    strncpy(msg->path, request_endpoint, HTTP_MAX_PATH_LEN);
+
+    send_request(s->ssl, msg);
+    tls_write(s->ssl, NULL, 0);
+    destroy_message(msg);
+    
+    //get back request
+    msg = read_response(s->ssl);
 }
 
