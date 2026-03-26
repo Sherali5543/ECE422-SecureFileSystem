@@ -1,0 +1,7 @@
+login
+bob
+bobpass
+group-list
+group-key devs
+read /groups/devs/shared.txt
+logout

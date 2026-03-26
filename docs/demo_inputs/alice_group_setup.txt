@@ -1,0 +1,10 @@
+login
+alice
+alicepass
+group-create devs
+group-add devs bob
+group-list
+create /groups/devs/shared.txt
+write /groups/devs/shared.txt shared hello from alice
+read /groups/devs/shared.txt
+logout

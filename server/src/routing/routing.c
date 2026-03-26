@@ -12,7 +12,10 @@ http_message_t* handle_request(http_message_t* msg, SSL* ssl, server_context_t *
 
   switch (msg->method) {
     case GET:
-      if (strncmp(msg->path, "/groups/key", HTTP_MAX_PATH_LEN) == 0) {
+      if (strncmp(msg->path, "/users/keys", HTTP_MAX_PATH_LEN) == 0) {
+        get_user_keys(msg, ssl, res, ctx);
+        return res;
+      } else if (strncmp(msg->path, "/groups/key", HTTP_MAX_PATH_LEN) == 0) {
         get_group_key(msg, ssl, res, ctx);
         return res;
       } else if (strncmp(msg->path, "/groups", HTTP_MAX_PATH_LEN) == 0) {
@@ -21,6 +24,9 @@ http_message_t* handle_request(http_message_t* msg, SSL* ssl, server_context_t *
       } else if (strncmp(msg->path, "/files/contents", HTTP_MAX_PATH_LEN) ==
                  0) {
         read_file(msg, ssl, res, ctx);
+        return res;
+      } else if (strncmp(msg->path, "/files/meta", HTTP_MAX_PATH_LEN) == 0) {
+        get_file_metadata(msg, ssl, res, ctx);
         return res;
       } else if (strncmp(msg->path, "/files", HTTP_MAX_PATH_LEN) == 0) {
         get_files(msg, ssl, res, ctx);

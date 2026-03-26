@@ -102,7 +102,6 @@ static int send_login_json(SSL* ssl, const char* body) {
   msg->content_type = JSON;
   msg->content_length = body_len;
 
-  printf("client login request body: %s\n", body);
   send_request(ssl, msg);
   destroy_message(msg);
 
@@ -129,7 +128,6 @@ static int send_register_json(SSL* ssl, const char* body) {
   msg->content_type = JSON;
   msg->content_length = body_len;
 
-  printf("client register request body: %s\n", body);
   send_request(ssl, msg);
   destroy_message(msg);
 
@@ -163,13 +161,19 @@ static char* request_login_challenge(SSL* ssl, const char* username) {
   free(request_body);
 
   response = read_response(ssl);
-  if (!response || response->status_code != 200 ||
+  if (!response) {
+    return NULL;
+  }
+  if (response->content_length > 0 &&
       read_response_body(response, ssl, &response_body) != 0) {
     destroy_message(response);
     return NULL;
   }
-
-  printf("client login response body: %s\n", response_body);
+  if (response->status_code != 200) {
+    free(response_body);
+    destroy_message(response);
+    return NULL;
+  }
 
   json = cJSON_Parse(response_body);
   if (!json) {
@@ -190,13 +194,19 @@ static char* request_login_challenge(SSL* ssl, const char* username) {
 }
 
 static char* submit_login_signature(SSL* ssl, const char* username,
-                                    const char* signature_hex) {
+                                    const char* signature_hex,
+                                    int* out_user_id) {
   cJSON* json = NULL;
   cJSON* token_json = NULL;
+  cJSON* user_id_json = NULL;
   http_message_t* response = NULL;
   char* request_body = NULL;
   char* response_body = NULL;
   char* token = NULL;
+
+  if (out_user_id != NULL) {
+    *out_user_id = 0;
+  }
 
   json = cJSON_CreateObject();
   if (!json) {
@@ -218,13 +228,19 @@ static char* submit_login_signature(SSL* ssl, const char* username,
   free(request_body);
 
   response = read_response(ssl);
-  if (!response || response->status_code != 200 ||
+  if (!response) {
+    return NULL;
+  }
+  if (response->content_length > 0 &&
       read_response_body(response, ssl, &response_body) != 0) {
     destroy_message(response);
     return NULL;
   }
-
-  printf("client login response body: %s\n", response_body);
+  if (response->status_code != 200) {
+    free(response_body);
+    destroy_message(response);
+    return NULL;
+  }
 
   json = cJSON_Parse(response_body);
   if (!json) {
@@ -234,8 +250,12 @@ static char* submit_login_signature(SSL* ssl, const char* username,
   }
 
   token_json = cJSON_GetObjectItemCaseSensitive(json, "token");
+  user_id_json = cJSON_GetObjectItemCaseSensitive(json, "user_id");
   if (cJSON_IsString(token_json) && token_json->valuestring != NULL) {
     token = strdup(token_json->valuestring);
+  }
+  if (out_user_id != NULL && cJSON_IsNumber(user_id_json)) {
+    *out_user_id = user_id_json->valueint;
   }
 
   cJSON_Delete(json);
@@ -253,8 +273,13 @@ int register_account(SSL* ssl) {
   char* pwd = NULL;
   char* request_body = NULL;
   char* response_body = NULL;
+  char* home_component = NULL;
+  char* user_home_component = NULL;
   char public_encryption_key_hex[crypto_box_PUBLICKEYBYTES * 2 + 1];
   char public_signing_key_hex[crypto_sign_PUBLICKEYBYTES * 2 + 1];
+  unsigned char private_name_key[crypto_secretbox_KEYBYTES];
+  char home_path[SESSION_PATH_MAX];
+  char user_home_path[SESSION_PATH_MAX];
   int rc = -1;
 
   printf("New username: ");
@@ -286,6 +311,20 @@ int register_account(SSL* ssl) {
     fprintf(stderr, "Failed to encode registration keys\n");
     goto cleanup;
   }
+  if (derive_private_name_key(user_keys, private_name_key) != 0) {
+    fprintf(stderr, "Failed to derive private name key\n");
+    goto cleanup;
+  }
+  home_component = encrypt_name_component_hex(private_name_key, "home");
+  user_home_component =
+      encrypt_name_component_hex(private_name_key, username);
+  if (home_component == NULL || user_home_component == NULL ||
+      snprintf(home_path, sizeof(home_path), "/%s", home_component) < 0 ||
+      snprintf(user_home_path, sizeof(user_home_path), "/%s/%s", home_component,
+               user_home_component) < 0) {
+    fprintf(stderr, "Failed to encode encrypted home paths\n");
+    goto cleanup;
+  }
 
   json = cJSON_CreateObject();
   if (!json) {
@@ -296,6 +335,10 @@ int register_account(SSL* ssl) {
   cJSON_AddStringToObject(json, "public_encryption_key",
                           public_encryption_key_hex);
   cJSON_AddStringToObject(json, "public_signing_key", public_signing_key_hex);
+  cJSON_AddStringToObject(json, "home_path", home_path);
+  cJSON_AddStringToObject(json, "home_name", home_component);
+  cJSON_AddStringToObject(json, "user_home_path", user_home_path);
+  cJSON_AddStringToObject(json, "user_home_name", user_home_component);
   request_body = cJSON_PrintUnformatted(json);
   cJSON_Delete(json);
   json = NULL;
@@ -312,10 +355,9 @@ int register_account(SSL* ssl) {
     goto cleanup;
   }
 
-  printf("client register response body: %s\n", response_body);
   if (response->status_code == 201) {
     rc = 0;
-    printf("Registration successful for user '%s'\n", username);
+    printf("Registered user '%s'\n", username);
   }
 
 cleanup:
@@ -323,6 +365,8 @@ cleanup:
   destroy_message(response);
   free(request_body);
   free(response_body);
+  free(home_component);
+  free(user_home_component);
   free(user_keys);
   free(sign_keys);
   free(username);
@@ -353,7 +397,6 @@ int logout(SSL* ssl, Session* session) {
   msg->content_type = NONE;
   msg->content_length = 0;
 
-  printf("client logout request token: %s\n", session->token);
   send_request(ssl, msg);
   destroy_message(msg);
 
@@ -362,9 +405,8 @@ int logout(SSL* ssl, Session* session) {
     return -1;
   }
 
-  if (response->content_length > 0 &&
-      read_response_body(response, ssl, &response_body) == 0) {
-    printf("client logout response body: %s\n", response_body);
+  if (response->content_length > 0) {
+    read_response_body(response, ssl, &response_body);
   }
 
   if (response->status_code == 200) {
@@ -396,11 +438,13 @@ Session login(SSL* ssl) {
     return s;
   }
   SignKeys* sign_keys = NULL;
+  UserKeys* user_keys = NULL;
   char* challenge_hex = NULL;
   unsigned char challenge[crypto_sign_BYTES];
   size_t challenge_len = 0;
   char* signed_challenge = NULL;
   char signature_hex[(crypto_sign_BYTES + crypto_sign_BYTES) * 2 + 1];
+  int user_id = 0;
 
   setStdinEcho(true);
 
@@ -422,17 +466,27 @@ Session login(SSL* ssl) {
   free(challenge_hex);
 
   sign_keys = generate_signing_keypair(username, pwd);
-  free(pwd);
   if (!sign_keys) {
     fprintf(stderr, "Failed to derive signing keys\n");
+    free(pwd);
+    free(username);
+    return s;
+  }
+
+  user_keys = generate_read_keypair(username, pwd);
+  free(pwd);
+  if (!user_keys) {
+    fprintf(stderr, "Failed to derive encryption keys\n");
+    free(sign_keys);
     free(username);
     return s;
   }
 
   signed_challenge = generate_bytes_signature(challenge, challenge_len, sign_keys);
-  free(sign_keys);
   if (!signed_challenge) {
     fprintf(stderr, "Failed to sign login challenge\n");
+    free(user_keys);
+    free(sign_keys);
     free(username);
     return s;
   }
@@ -442,22 +496,29 @@ Session login(SSL* ssl) {
                  sizeof(signature_hex)) != 0) {
     fprintf(stderr, "Failed to encode login signature\n");
     free(signed_challenge);
+    free(user_keys);
+    free(sign_keys);
     free(username);
     return s;
   }
   free(signed_challenge);
 
-  s.token = submit_login_signature(ssl, username, signature_hex);
+  s.token = submit_login_signature(ssl, username, signature_hex, &user_id);
   if (!s.token) {
     fprintf(stderr, "Login failed\n");
+    free(user_keys);
+    free(sign_keys);
     free(username);
     memset(&s, 0, sizeof(s));
     return s;
   }
 
-  s.id = 0;
+  s.id = user_id;
   s.username = username;
-  printf("Login successful. Session token: %s\n", s.token);
+  s.user_keys = user_keys;
+  s.sign_keys = sign_keys;
+  snprintf(s.cwd, sizeof(s.cwd), "/home/%s", username);
+  printf("Login successful.\n");
   return s;
 }
 
@@ -467,6 +528,10 @@ void destroy_session(Session* s) {
   }
   free(s->username);
   free(s->token);
+  free(s->user_keys);
+  free(s->sign_keys);
   s->username = NULL;
   s->token = NULL;
+  s->user_keys = NULL;
+  s->sign_keys = NULL;
 }

@@ -1,0 +1,16 @@
+python3 - <<'PY'
+from pathlib import Path
+
+files = [p for p in Path("server/deploy/storage/sfs_storage").rglob("*") if p.is_file()]
+if not files:
+    raise SystemExit("no stored files found")
+
+target = files[-1]
+data = bytearray(target.read_bytes())
+if not data:
+    raise SystemExit("cannot corrupt empty file")
+
+data[0] ^= 1
+target.write_bytes(data)
+print(target)
+PY

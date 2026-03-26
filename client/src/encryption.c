@@ -272,16 +272,45 @@ char* decrypt_file(char* file_key, char* filepath){
 
     unsigned char header[crypto_secretstream_xchacha20poly1305_HEADERBYTES];    
     
-    int fd = open(filepath, O_RDONLY);
-
-    read(fd, header, crypto_secretstream_xchacha20poly1305_HEADERBYTES);
-
-    char* temp_filename = strdup("/tmp/sfs_decrypt_XXXXXX");
+    int fd = -1;
+    char* temp_filename = NULL;
     crypto_secretstream_xchacha20poly1305_state state;
+    int temp_fd = -1;
+    int ok = 0;
 
-    int temp_fd = mkstemp(temp_filename);
+    if (file_key == NULL || filepath == NULL) {
+        return NULL;
+    }
 
-    crypto_secretstream_xchacha20poly1305_init_pull(&state, (const unsigned char*) header, (const unsigned char *)file_key);
+    fd = open(filepath, O_RDONLY);
+    if (fd < 0) {
+        return NULL;
+    }
+
+    if (read(fd, header, crypto_secretstream_xchacha20poly1305_HEADERBYTES) !=
+        crypto_secretstream_xchacha20poly1305_HEADERBYTES) {
+        close(fd);
+        return NULL;
+    }
+
+    temp_filename = strdup("/tmp/sfs_decrypt_XXXXXX");
+    if (temp_filename == NULL) {
+        close(fd);
+        return NULL;
+    }
+
+    temp_fd = mkstemp(temp_filename);
+    if (temp_fd < 0) {
+        close(fd);
+        free(temp_filename);
+        return NULL;
+    }
+
+    if (crypto_secretstream_xchacha20poly1305_init_pull(
+            &state, (const unsigned char*) header,
+            (const unsigned char*)file_key) != 0) {
+        goto cleanup;
+    }
 
     ssize_t amount_read;
     unsigned long long out_len;
@@ -291,6 +320,10 @@ char* decrypt_file(char* file_key, char* filepath){
         amount_read = read(fd, inbuf, sizeof(inbuf));
 
         if(amount_read == 0){
+            goto cleanup;
+        }
+        if (amount_read < 0) {
+            goto cleanup;
         }
 
         // do the encryption for this segment
@@ -303,6 +336,7 @@ char* decrypt_file(char* file_key, char* filepath){
             (unsigned long long) amount_read,
             NULL,
             0) != 0){
+            goto cleanup;
         }
 
 
@@ -310,23 +344,155 @@ char* decrypt_file(char* file_key, char* filepath){
         unsigned long long total_written = 0;
         while(total_written < out_len){
             ssize_t nwritten = write(temp_fd, outbuf + total_written, out_len - total_written);
+            if (nwritten <= 0) {
+                goto cleanup;
+            }
 
             total_written += (unsigned long long) nwritten;
         }
 
         if (tag == crypto_secretstream_xchacha20poly1305_TAG_FINAL) {
+            ok = 1;
             break;
         }
     }
 
+cleanup:
     close(temp_fd);
     close(fd);
 
     sodium_memzero(&state, sizeof state);
     sodium_memzero(inbuf, sizeof inbuf);
     sodium_memzero(outbuf, sizeof outbuf);
+    sodium_memzero(header, sizeof header);
+
+    if (!ok) {
+        unlink(temp_filename);
+        free(temp_filename);
+        return NULL;
+    }
 
     return temp_filename;
+}
+
+int derive_private_name_key(const UserKeys* user_keys,
+                            unsigned char out_key[crypto_secretbox_KEYBYTES]) {
+    if (user_keys == NULL || out_key == NULL) {
+        return -1;
+    }
+
+    memcpy(out_key, user_keys->secret_key, crypto_secretbox_KEYBYTES);
+    return 0;
+}
+
+char* encrypt_name_component_hex(const unsigned char* name_key,
+                                 const char* component) {
+    unsigned char nonce[crypto_secretbox_NONCEBYTES];
+    unsigned char* packed = NULL;
+    unsigned char* ciphertext = NULL;
+    char* hex = NULL;
+    size_t component_len = 0;
+    size_t packed_len = 0;
+
+    if (name_key == NULL || component == NULL || component[0] == '\0') {
+        return NULL;
+    }
+
+    component_len = strlen(component);
+    packed_len = crypto_secretbox_NONCEBYTES + crypto_secretbox_MACBYTES +
+                 component_len;
+
+    packed = malloc(packed_len);
+    ciphertext = malloc(crypto_secretbox_MACBYTES + component_len);
+    hex = malloc(packed_len * 2 + 1);
+    if (packed == NULL || ciphertext == NULL || hex == NULL) {
+        free(packed);
+        free(ciphertext);
+        free(hex);
+        return NULL;
+    }
+
+    crypto_generichash(nonce, sizeof(nonce), (const unsigned char*)component,
+                       (unsigned long long)component_len, name_key,
+                       crypto_secretbox_KEYBYTES);
+    crypto_secretbox_easy(ciphertext, (const unsigned char*)component,
+                          (unsigned long long)component_len, nonce, name_key);
+
+    memcpy(packed, nonce, crypto_secretbox_NONCEBYTES);
+    memcpy(packed + crypto_secretbox_NONCEBYTES, ciphertext,
+           crypto_secretbox_MACBYTES + component_len);
+    sodium_bin2hex(hex, packed_len * 2 + 1, packed, packed_len);
+
+    sodium_memzero(nonce, sizeof(nonce));
+    sodium_memzero(ciphertext, crypto_secretbox_MACBYTES + component_len);
+    sodium_memzero(packed, packed_len);
+    free(ciphertext);
+    free(packed);
+    return hex;
+}
+
+char* decrypt_name_component_hex(const unsigned char* name_key,
+                                 const char* component_hex) {
+    unsigned char* packed = NULL;
+    unsigned char* plaintext = NULL;
+    char* out = NULL;
+    const unsigned char* nonce = NULL;
+    const unsigned char* ciphertext = NULL;
+    size_t hex_len = 0;
+    size_t packed_len = 0;
+    size_t ciphertext_len = 0;
+
+    if (name_key == NULL || component_hex == NULL || component_hex[0] == '\0') {
+        return NULL;
+    }
+
+    hex_len = strlen(component_hex);
+    if ((hex_len % 2) != 0) {
+        return NULL;
+    }
+
+    packed_len = hex_len / 2;
+    if (packed_len <= crypto_secretbox_NONCEBYTES + crypto_secretbox_MACBYTES) {
+        return NULL;
+    }
+
+    packed = malloc(packed_len);
+    if (packed == NULL) {
+        return NULL;
+    }
+    if (sodium_hex2bin(packed, packed_len, component_hex, hex_len, NULL,
+                       &packed_len, NULL) != 0) {
+        free(packed);
+        return NULL;
+    }
+
+    nonce = packed;
+    ciphertext = packed + crypto_secretbox_NONCEBYTES;
+    ciphertext_len = packed_len - crypto_secretbox_NONCEBYTES;
+    plaintext = malloc(ciphertext_len - crypto_secretbox_MACBYTES + 1);
+    if (plaintext == NULL) {
+        sodium_memzero(packed, packed_len);
+        free(packed);
+        return NULL;
+    }
+
+    if (crypto_secretbox_open_easy(plaintext, ciphertext,
+                                   (unsigned long long)ciphertext_len, nonce,
+                                   name_key) != 0) {
+        sodium_memzero(plaintext, ciphertext_len - crypto_secretbox_MACBYTES + 1);
+        free(plaintext);
+        sodium_memzero(packed, packed_len);
+        free(packed);
+        return NULL;
+    }
+
+    plaintext[ciphertext_len - crypto_secretbox_MACBYTES] = '\0';
+    out = strdup((char*)plaintext);
+    sodium_memzero(plaintext, ciphertext_len - crypto_secretbox_MACBYTES + 1);
+    free(plaintext);
+    sodium_memzero(packed, packed_len);
+    free(packed);
+    return out;
 }
 
 

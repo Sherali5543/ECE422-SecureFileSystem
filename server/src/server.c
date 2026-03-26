@@ -8,23 +8,22 @@
 #include "server_context.h"
 #include "tls.h"
 
+#define DEFAULT_SERVER_CERT "server/deploy/secrets/server-cert.pem"
+#define DEFAULT_SERVER_KEY "server/deploy/secrets/server-key.pem"
+#define DEFAULT_SERVER_PORT "8443"
+
 void handle_client(SSL* ssl, server_context_t *ctx) {
   while (1) {
-    printf("---------Reading request\n");
     http_message_t* msg = read_request(ssl);
     if (msg == NULL) {
-      printf("No message\n");
       return;
     }
 
-    printf("-------Handling request\n");
     http_message_t* response = handle_request(msg, ssl, ctx);
     free(msg);
     if (response == NULL) {
-      printf("No response\n");
       return;  // Shouldn't actually happen
     }
-    printf("---------Sending response\n");
     if (!response->message_sent) {
       send_response(ssl, response);
     }
@@ -37,6 +36,16 @@ void server_loop(void) {
   const char* key = getenv("SERVER_KEY");
   const char* port = getenv("PORT");
   server_context_t server_ctx;
+
+  if (cert == NULL || cert[0] == '\0') {
+    cert = DEFAULT_SERVER_CERT;
+  }
+  if (key == NULL || key[0] == '\0') {
+    key = DEFAULT_SERVER_KEY;
+  }
+  if (port == NULL || port[0] == '\0') {
+    port = DEFAULT_SERVER_PORT;
+  }
 
   if (server_context_init(&server_ctx) != 0) {
     fprintf(stderr, "Failed to initialize server context\n");
@@ -57,7 +66,7 @@ void server_loop(void) {
     handle_client(ssl, &server_ctx);
     int ret = SSL_shutdown(ssl);
     if (ret < 0) {
-      printf("Error closing\n");
+      fprintf(stderr, "Error closing TLS connection\n");
     }
     SSL_free(ssl);
   }

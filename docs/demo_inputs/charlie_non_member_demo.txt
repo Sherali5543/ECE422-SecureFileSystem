@@ -1,0 +1,9 @@
+register
+charlie
+charliepass
+login
+charlie
+charliepass
+group-list
+group-key devs
+logout

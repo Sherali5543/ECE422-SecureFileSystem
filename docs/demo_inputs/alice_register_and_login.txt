@@ -1,0 +1,6 @@
+register
+alice
+alicepass
+login
+alice
+alicepass

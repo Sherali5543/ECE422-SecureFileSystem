@@ -1,9 +1,12 @@
 #include "handlers.h"
 
+#include <errno.h>
 #include <sodium.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <time.h>
 
 #include "cjson/cJSON.h"
 #include "db.h"
@@ -28,6 +31,10 @@ typedef struct {
   const char* username;
   const char* public_encryption_key_hex;
   const char* public_signing_key_hex;
+  const char* home_path;
+  const char* home_name;
+  const char* user_home_path;
+  const char* user_home_name;
 } register_request_t;
 
 static void set_json_response(http_message_t* response, int status,
@@ -173,8 +180,6 @@ static int parse_login_request(http_message_t* msg, SSL* ssl,
     return -1;
   }
 
-  printf("login request body: %s\n", out->body);
-
   out->json = cJSON_Parse(out->body);
   if (!out->json) {
     send_json_error(ssl, response, 400, "Bad Request",
@@ -211,6 +216,10 @@ static int parse_register_request(http_message_t* msg, SSL* ssl,
   cJSON* username_json = NULL;
   cJSON* enc_key_json = NULL;
   cJSON* sign_key_json = NULL;
+  cJSON* home_path_json = NULL;
+  cJSON* home_name_json = NULL;
+  cJSON* user_home_path_json = NULL;
+  cJSON* user_home_name_json = NULL;
 
   if (!msg || !ssl || !response || !out) {
     return -1;
@@ -246,8 +255,6 @@ static int parse_register_request(http_message_t* msg, SSL* ssl,
     return -1;
   }
 
-  printf("register request body: %s\n", out->body);
-
   out->json = cJSON_Parse(out->body);
   if (!out->json) {
     send_json_error(ssl, response, 400, "Bad Request",
@@ -260,6 +267,12 @@ static int parse_register_request(http_message_t* msg, SSL* ssl,
       cJSON_GetObjectItemCaseSensitive(out->json, "public_encryption_key");
   sign_key_json =
       cJSON_GetObjectItemCaseSensitive(out->json, "public_signing_key");
+  home_path_json = cJSON_GetObjectItemCaseSensitive(out->json, "home_path");
+  home_name_json = cJSON_GetObjectItemCaseSensitive(out->json, "home_name");
+  user_home_path_json =
+      cJSON_GetObjectItemCaseSensitive(out->json, "user_home_path");
+  user_home_name_json =
+      cJSON_GetObjectItemCaseSensitive(out->json, "user_home_name");
 
   if (!cJSON_IsString(username_json) || username_json->valuestring == NULL ||
       username_json->valuestring[0] == '\0') {
@@ -279,10 +292,190 @@ static int parse_register_request(http_message_t* msg, SSL* ssl,
                     "{\"error\":\"public_signing_key is required\"}");
     return -1;
   }
+  if ((home_path_json != NULL &&
+       (!cJSON_IsString(home_path_json) || home_path_json->valuestring == NULL ||
+        home_path_json->valuestring[0] == '\0')) ||
+      (home_name_json != NULL &&
+       (!cJSON_IsString(home_name_json) || home_name_json->valuestring == NULL ||
+        home_name_json->valuestring[0] == '\0')) ||
+      (user_home_path_json != NULL &&
+       (!cJSON_IsString(user_home_path_json) ||
+        user_home_path_json->valuestring == NULL ||
+        user_home_path_json->valuestring[0] == '\0')) ||
+      (user_home_name_json != NULL &&
+       (!cJSON_IsString(user_home_name_json) ||
+        user_home_name_json->valuestring == NULL ||
+        user_home_name_json->valuestring[0] == '\0'))) {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"invalid encrypted home metadata\"}");
+    return -1;
+  }
 
   out->username = username_json->valuestring;
   out->public_encryption_key_hex = enc_key_json->valuestring;
   out->public_signing_key_hex = sign_key_json->valuestring;
+  out->home_path =
+      cJSON_IsString(home_path_json) ? home_path_json->valuestring : NULL;
+  out->home_name =
+      cJSON_IsString(home_name_json) ? home_name_json->valuestring : NULL;
+  out->user_home_path = cJSON_IsString(user_home_path_json)
+                            ? user_home_path_json->valuestring
+                            : NULL;
+  out->user_home_name = cJSON_IsString(user_home_name_json)
+                            ? user_home_name_json->valuestring
+                            : NULL;
+  return 0;
+}
+
+static int create_registration_home_directories(server_context_t* ctx,
+                                                const register_request_t* req,
+                                                int user_id) {
+  db_file_metadata_t home_meta;
+  db_file_metadata_t user_home_meta;
+  int ignored_id = 0;
+  long long now = (long long)time(NULL);
+
+  if (ctx == NULL || req == NULL) {
+    return -1;
+  }
+  if (req->home_path == NULL || req->home_name == NULL ||
+      req->user_home_path == NULL || req->user_home_name == NULL) {
+    return 0;
+  }
+
+  memset(&home_meta, 0, sizeof(home_meta));
+  memcpy(home_meta.path, req->home_path, strlen(req->home_path));
+  home_meta.path_len = strlen(req->home_path);
+  memcpy(home_meta.name, req->home_name, strlen(req->home_name));
+  home_meta.name_len = strlen(req->home_name);
+  home_meta.owner_id = user_id;
+  home_meta.mode_bits = 0750;
+  strncpy(home_meta.object_type, "directory", sizeof(home_meta.object_type) - 1);
+  home_meta.created_at = now;
+  home_meta.updated_at = now;
+
+  memset(&user_home_meta, 0, sizeof(user_home_meta));
+  memcpy(user_home_meta.path, req->user_home_path, strlen(req->user_home_path));
+  user_home_meta.path_len = strlen(req->user_home_path);
+  memcpy(user_home_meta.name, req->user_home_name, strlen(req->user_home_name));
+  user_home_meta.name_len = strlen(req->user_home_name);
+  user_home_meta.owner_id = user_id;
+  user_home_meta.mode_bits = 0750;
+  strncpy(user_home_meta.object_type, "directory",
+          sizeof(user_home_meta.object_type) - 1);
+  user_home_meta.created_at = now;
+  user_home_meta.updated_at = now;
+
+  if (db_create_file_metadata(ctx, &home_meta, &ignored_id) != 0 &&
+      db_find_file_metadata_by_path(ctx, req->home_path, strlen(req->home_path),
+                                    &home_meta) < 0) {
+    return -1;
+  }
+  if (db_create_file_metadata(ctx, &user_home_meta, &ignored_id) != 0 &&
+      db_find_file_metadata_by_path(ctx, req->user_home_path,
+                                    strlen(req->user_home_path),
+                                    &user_home_meta) < 0) {
+    return -1;
+  }
+
+  return 0;
+}
+
+static int build_storage_path(server_context_t* ctx, const char* filepath,
+                              char* out, size_t out_sz) {
+  int written = 0;
+
+  if (ctx == NULL || ctx->storage_root == NULL || filepath == NULL ||
+      out == NULL || out_sz == 0) {
+    return -1;
+  }
+
+  written = snprintf(out, out_sz, "%s%s", ctx->storage_root, filepath);
+  if (written < 0 || (size_t)written >= out_sz) {
+    return -1;
+  }
+
+  return 0;
+}
+
+static int ensure_directory_path(const char* fullpath) {
+  char tmp[DB_FILE_PATH_MAX * 2];
+  char* p = NULL;
+
+  if (fullpath == NULL || fullpath[0] == '\0') {
+    return -1;
+  }
+
+  strncpy(tmp, fullpath, sizeof(tmp) - 1);
+  tmp[sizeof(tmp) - 1] = '\0';
+
+  for (p = tmp + 1; *p != '\0'; p++) {
+    if (*p == '/') {
+      *p = '\0';
+      if (mkdir(tmp, 0755) != 0 && errno != EEXIST) {
+        return -1;
+      }
+      *p = '/';
+    }
+  }
+
+  if (mkdir(tmp, 0755) != 0 && errno != EEXIST) {
+    return -1;
+  }
+
+  return 0;
+}
+
+static int ensure_registration_storage_directories(server_context_t* ctx,
+                                                   const register_request_t* req) {
+  char home_storage_path[DB_FILE_PATH_MAX * 2];
+  char user_home_storage_path[DB_FILE_PATH_MAX * 2];
+
+  if (ctx == NULL || req == NULL || req->home_path == NULL ||
+      req->user_home_path == NULL) {
+    return -1;
+  }
+
+  if (build_storage_path(ctx, req->home_path, home_storage_path,
+                         sizeof(home_storage_path)) != 0 ||
+      build_storage_path(ctx, req->user_home_path, user_home_storage_path,
+                         sizeof(user_home_storage_path)) != 0) {
+    return -1;
+  }
+
+  if (ensure_directory_path(home_storage_path) != 0 ||
+      ensure_directory_path(user_home_storage_path) != 0) {
+    return -1;
+  }
+
+  return 0;
+}
+
+static int parse_username_query(const http_message_t* msg, char* out_username,
+                                size_t out_size) {
+  static const char prefix[] = "username=";
+  const char* value = NULL;
+  size_t len = 0;
+
+  if (!msg || !out_username || out_size == 0) {
+    return -1;
+  }
+  if (strncmp(msg->query, prefix, sizeof(prefix) - 1) != 0) {
+    return -1;
+  }
+
+  value = msg->query + sizeof(prefix) - 1;
+  if (*value == '\0' || strchr(value, '&') != NULL) {
+    return -1;
+  }
+
+  len = strlen(value);
+  if (len >= out_size) {
+    return -1;
+  }
+
+  memcpy(out_username, value, len);
+  out_username[len] = '\0';
   return 0;
 }
 
@@ -328,7 +521,6 @@ static int issue_challenge(server_context_t* ctx, const db_user_t* user,
     return -1;
   }
 
-  printf("login challenge response body: %s\n", json);
   set_json_response(response, 200, "OK", (size_t)written);
   send_response(ssl, response);
   write_json_body(ssl, json);
@@ -423,14 +615,14 @@ static int verify_signature_and_login(server_context_t* ctx,
   }
 
   clear_pending_login(ctx);
-  written = snprintf(json, sizeof(json), "{\"token\":\"%s\"}", token);
+  written = snprintf(json, sizeof(json), "{\"token\":\"%s\",\"user_id\":%d}",
+                     token, user->id);
   if (written < 0 || (size_t)written >= sizeof(json)) {
     send_json_error(ssl, response, 500, "Internal Server Error",
                     "{\"error\":\"failed to build token response\"}");
     return -1;
   }
 
-  printf("login success response body: %s\n", json);
   set_json_response(response, 200, "OK", (size_t)written);
   send_response(ssl, response);
   write_json_body(ssl, json);
@@ -467,10 +659,8 @@ void login_user(http_message_t* msg, SSL* ssl, http_message_t* response,
   }
 
   if (req.signature_hex == NULL) {
-    printf("Issuing challenge\n");
     issue_challenge(ctx, &user, response, ssl);
   } else {
-    printf("Veriyfing\n");
     verify_signature_and_login(ctx, &req, &user, response, ssl);
   }
 
@@ -509,7 +699,6 @@ void logout_user(http_message_t* msg, SSL* ssl, http_message_t* response,
     set_json_response(response, 200, "OK", strlen(json));
     send_response(ssl, response);
     write_json_body(ssl, json);
-    printf("logout success response body: %s\n", json);
     return;
   }
 
@@ -572,6 +761,20 @@ void register_user(http_message_t* msg, SSL* ssl, http_message_t* response,
     return;
   }
 
+  if (create_registration_home_directories(ctx, &req, user_id) != 0) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to create encrypted home directories\"}");
+    cleanup_register_request(&req);
+    return;
+  }
+  if (ensure_registration_storage_directories(ctx, &req) != 0) {
+    send_json_error(
+        ssl, response, 500, "Internal Server Error",
+        "{\"error\":\"failed to create encrypted home storage directories\"}");
+    cleanup_register_request(&req);
+    return;
+  }
+
   written = snprintf(json, sizeof(json),
                      "{\"message\":\"registered\",\"user_id\":%d}", user_id);
   if (written < 0 || (size_t)written >= sizeof(json)) {
@@ -581,9 +784,93 @@ void register_user(http_message_t* msg, SSL* ssl, http_message_t* response,
     return;
   }
 
-  printf("register success response body: %s\n", json);
   set_json_response(response, 201, "Created", (size_t)written);
   send_response(ssl, response);
   write_json_body(ssl, json);
   cleanup_register_request(&req);
+}
+
+void get_user_keys(http_message_t* msg, SSL* ssl, http_message_t* response,
+                   server_context_t* ctx) {
+  db_user_t requester;
+  db_user_t target;
+  char username[DB_USERNAME_MAX];
+  char public_encryption_key_hex[DB_PUBLIC_ENCRYPTION_KEY_MAX * 2 + 1];
+  char public_signing_key_hex[DB_PUBLIC_SIGNING_KEY_MAX * 2 + 1];
+  char json[4096];
+  int written = 0;
+  int rc = 0;
+
+  if (!msg || !ssl || !response || !ctx) {
+    return;
+  }
+
+  if (msg->auth_token[0] == '\0') {
+    send_json_error(ssl, response, 401, "Unauthorized",
+                    "{\"error\":\"missing bearer token\"}");
+    return;
+  }
+
+  requester.id = 0;
+  for (size_t i = 0; i < SERVER_MAX_SESSIONS; i++) {
+    server_session_t* session = &ctx->sessions[i];
+
+    if (!session->in_use) {
+      continue;
+    }
+    if (strncmp(session->token, msg->auth_token, SERVER_MAX_TOKEN_LEN) != 0) {
+      continue;
+    }
+    requester.id = session->user_id;
+    break;
+  }
+
+  if (requester.id == 0) {
+    send_json_error(ssl, response, 401, "Unauthorized",
+                    "{\"error\":\"invalid or expired token\"}");
+    return;
+  }
+
+  if (parse_username_query(msg, username, sizeof(username)) != 0) {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"invalid username query\"}");
+    return;
+  }
+
+  rc = db_find_user_by_username(ctx, username, &target);
+  if (rc < 0) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to query user\"}");
+    return;
+  }
+  if (rc == 0) {
+    send_json_error(ssl, response, 404, "Not Found",
+                    "{\"error\":\"unknown user\"}");
+    return;
+  }
+
+  if (hex_encode(target.public_encryption_key, target.public_encryption_key_len,
+                 public_encryption_key_hex,
+                 sizeof(public_encryption_key_hex)) != 0 ||
+      hex_encode(target.public_signing_key, target.public_signing_key_len,
+                 public_signing_key_hex, sizeof(public_signing_key_hex)) != 0) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to encode user keys\"}");
+    return;
+  }
+
+  written = snprintf(
+      json, sizeof(json),
+      "{\"username\":\"%s\",\"public_encryption_key\":\"%s\","
+      "\"public_signing_key\":\"%s\"}",
+      target.username, public_encryption_key_hex, public_signing_key_hex);
+  if (written < 0 || (size_t)written >= sizeof(json)) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to build user key response\"}");
+    return;
+  }
+
+  set_json_response(response, 200, "OK", (size_t)written);
+  send_response(ssl, response);
+  write_json_body(ssl, json);
 }

@@ -1,6 +1,8 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 
 #include "cjson/cJSON.h"
@@ -15,6 +17,10 @@ typedef struct {
   cJSON* json;
   const char* group_name;
   const char* wrapped_group_key_hex;
+  const char* groups_root_path;
+  const char* groups_root_name;
+  const char* group_dir_path;
+  const char* group_dir_name;
 } group_request_t;
 
 typedef struct {
@@ -167,6 +173,150 @@ static int is_valid_group_name(const char* group_name) {
   return len > 0 && len < DB_GROUP_NAME_MAX;
 }
 
+static int is_valid_encrypted_path_string(const char* path) {
+  size_t len = 0;
+
+  if (path == NULL || path[0] != '/') {
+    return 0;
+  }
+
+  len = strlen(path);
+  if (len <= 1 || len >= DB_FILE_PATH_MAX || path[len - 1] == '/') {
+    return 0;
+  }
+
+  return 1;
+}
+
+static int is_valid_encrypted_name_string(const char* name) {
+  size_t len = 0;
+
+  if (name == NULL) {
+    return 0;
+  }
+
+  len = strlen(name);
+  return len > 0 && len < DB_FILE_NAME_MAX && strchr(name, '/') == NULL;
+}
+
+static int build_storage_path(server_context_t* ctx, const char* filepath,
+                              char* out, size_t out_sz) {
+  int written = 0;
+
+  if (!ctx || !ctx->storage_root || !filepath || !out || out_sz == 0) {
+    return -1;
+  }
+
+  written = snprintf(out, out_sz, "%s%s", ctx->storage_root, filepath);
+  if (written < 0 || (size_t)written >= out_sz) {
+    return -1;
+  }
+
+  return 0;
+}
+
+static int create_directory_ctx(server_context_t* ctx, const char* dirpath) {
+  char fullpath[DB_FILE_PATH_MAX * 2];
+
+  if (!ctx || !dirpath) {
+    return -1;
+  }
+  if (build_storage_path(ctx, dirpath, fullpath, sizeof(fullpath)) != 0) {
+    return -1;
+  }
+  if (mkdir(fullpath, 0755) != 0 && errno != EEXIST) {
+    return -1;
+  }
+  return 0;
+}
+
+static int populate_directory_metadata(db_file_metadata_t* out_meta,
+                                       const char* path, const char* name,
+                                       int owner_id, int has_group_id,
+                                       int group_id, int mode_bits) {
+  size_t path_len = 0;
+  size_t name_len = 0;
+  long long now = (long long)time(NULL);
+
+  if (!out_meta || !path || !name) {
+    return -1;
+  }
+
+  path_len = strlen(path);
+  name_len = strlen(name);
+  if (path_len >= sizeof(out_meta->path) || name_len >= sizeof(out_meta->name)) {
+    return -1;
+  }
+
+  memset(out_meta, 0, sizeof(*out_meta));
+  memcpy(out_meta->path, path, path_len);
+  out_meta->path_len = path_len;
+  memcpy(out_meta->name, name, name_len);
+  out_meta->name_len = name_len;
+  out_meta->owner_id = owner_id;
+  out_meta->has_group_id = has_group_id;
+  out_meta->group_id = group_id;
+  out_meta->mode_bits = mode_bits;
+  strncpy(out_meta->object_type, "directory",
+          sizeof(out_meta->object_type) - 1);
+  out_meta->created_at = now;
+  out_meta->updated_at = now;
+  return 0;
+}
+
+static int ensure_shared_group_directories(server_context_t* ctx,
+                                           const group_request_t* req,
+                                           int owner_id, int group_id) {
+  db_file_metadata_t existing = {0};
+  db_file_metadata_t root_meta = {0};
+  db_file_metadata_t group_meta = {0};
+  int rc = 0;
+
+  if (!ctx || !req) {
+    return -1;
+  }
+
+  rc = db_find_file_metadata_by_path(ctx, req->groups_root_path,
+                                     strlen(req->groups_root_path), &existing);
+  if (rc == -1) {
+    return -1;
+  }
+  if (rc == 0) {
+    if (populate_directory_metadata(&root_meta, req->groups_root_path,
+                                    req->groups_root_name, owner_id, 0, 0,
+                                    0755) != 0 ||
+        db_create_file_metadata(ctx, &root_meta, NULL) != 0 ||
+        create_directory_ctx(ctx, req->groups_root_path) != 0) {
+      return -1;
+    }
+  } else if (strncmp(existing.object_type, "directory",
+                     sizeof(existing.object_type)) != 0) {
+    return -1;
+  }
+
+  rc = db_find_file_metadata_by_path(ctx, req->group_dir_path,
+                                     strlen(req->group_dir_path), &existing);
+  if (rc == -1) {
+    return -1;
+  }
+  if (rc == 1) {
+    return strncmp(existing.object_type, "directory",
+                   sizeof(existing.object_type)) == 0
+               ? 0
+               : -1;
+  }
+
+  if (populate_directory_metadata(&group_meta, req->group_dir_path,
+                                  req->group_dir_name, owner_id, 1, group_id,
+                                  0770) != 0 ||
+      db_create_file_metadata(ctx, &group_meta, NULL) != 0 ||
+      create_directory_ctx(ctx, req->group_dir_path) != 0) {
+    return -1;
+  }
+
+  return 0;
+}
+
 static void cleanup_group_request(group_request_t* req) {
   if (req == NULL) {
     return;
@@ -195,6 +345,10 @@ static int parse_group_request(http_message_t* msg, SSL* ssl,
                                size_t* out_body_bytes_read) {
   cJSON* group_name_json = NULL;
   cJSON* wrapped_group_key_json = NULL;
+  cJSON* groups_root_path_json = NULL;
+  cJSON* groups_root_name_json = NULL;
+  cJSON* group_dir_path_json = NULL;
+  cJSON* group_dir_name_json = NULL;
 
   if (!msg || !ssl || !response || !out_req || !out_body_bytes_read) {
     return -1;
@@ -240,18 +394,38 @@ static int parse_group_request(http_message_t* msg, SSL* ssl,
       cJSON_GetObjectItemCaseSensitive(out_req->json, "group_name");
   wrapped_group_key_json =
       cJSON_GetObjectItemCaseSensitive(out_req->json, "wrapped_group_key");
+  groups_root_path_json =
+      cJSON_GetObjectItemCaseSensitive(out_req->json, "groups_root_path");
+  groups_root_name_json =
+      cJSON_GetObjectItemCaseSensitive(out_req->json, "groups_root_name");
+  group_dir_path_json =
+      cJSON_GetObjectItemCaseSensitive(out_req->json, "group_dir_path");
+  group_dir_name_json =
+      cJSON_GetObjectItemCaseSensitive(out_req->json, "group_dir_name");
   if (!cJSON_IsString(group_name_json) || group_name_json->valuestring == NULL ||
       !is_valid_group_name(group_name_json->valuestring) ||
       !cJSON_IsString(wrapped_group_key_json) ||
       wrapped_group_key_json->valuestring == NULL ||
-      wrapped_group_key_json->valuestring[0] == '\0') {
+      wrapped_group_key_json->valuestring[0] == '\0' ||
+      !cJSON_IsString(groups_root_path_json) ||
+      !is_valid_encrypted_path_string(groups_root_path_json->valuestring) ||
+      !cJSON_IsString(groups_root_name_json) ||
+      !is_valid_encrypted_name_string(groups_root_name_json->valuestring) ||
+      !cJSON_IsString(group_dir_path_json) ||
+      !is_valid_encrypted_path_string(group_dir_path_json->valuestring) ||
+      !cJSON_IsString(group_dir_name_json) ||
+      !is_valid_encrypted_name_string(group_dir_name_json->valuestring)) {
     send_json_error(ssl, response, 400, "Bad Request",
-                    "{\"error\":\"invalid group_name or wrapped_group_key\"}");
+                    "{\"error\":\"invalid group create request\"}");
     return -1;
   }
 
   out_req->group_name = group_name_json->valuestring;
   out_req->wrapped_group_key_hex = wrapped_group_key_json->valuestring;
+  out_req->groups_root_path = groups_root_path_json->valuestring;
+  out_req->groups_root_name = groups_root_name_json->valuestring;
+  out_req->group_dir_path = group_dir_path_json->valuestring;
+  out_req->group_dir_name = group_dir_name_json->valuestring;
   return 0;
 }
 
@@ -466,7 +640,8 @@ void create_group(http_message_t* msg, SSL* ssl, http_message_t* response,
   }
   if (db_create_group(ctx, req.group_name, session.user_id, &group_id) != 0 ||
       db_add_user_to_group(ctx, session.user_id, group_id, wrapped_group_key,
-                           wrapped_group_key_len) != 0) {
+                           wrapped_group_key_len) != 0 ||
+      ensure_shared_group_directories(ctx, &req, session.user_id, group_id) != 0) {
     db_rollback(ctx);
     send_json_error(ssl, response, 500, "Internal Server Error",
                     "{\"error\":\"failed to create group\"}");

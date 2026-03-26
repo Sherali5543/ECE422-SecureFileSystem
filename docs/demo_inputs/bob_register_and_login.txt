@@ -1,0 +1,6 @@
+register
+bob
+bobpass
+login
+bob
+bobpass
