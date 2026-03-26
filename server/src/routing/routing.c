@@ -5,14 +5,16 @@
 #include "http.h"
 #include "string.h"
 #include "tls.h"
+#include "handlers.h"
 
-http_message_t* handle_request(http_message_t* msg, SSL* ssl) {
+http_message_t* handle_request(http_message_t* msg, SSL* ssl, server_context_t *ctx) {
   http_message_t* res = init_response();
 
   switch (msg->method) {
     case GET:
       if (strncmp(msg->path, "/files", HTTP_MAX_PATH_LEN) == 0) {
-        // Handle ls/cd files
+        // get_files(msg, ssl, res); // Ls/cd
+        return res;
       } else if (strncmp(msg->path, "/files/contents", HTTP_MAX_PATH_LEN) ==
                  0) {
         // Handle read files
@@ -38,6 +40,8 @@ http_message_t* handle_request(http_message_t* msg, SSL* ssl) {
         // Handle mkdir
       } else if (strncmp(msg->path, "/files", HTTP_MAX_PATH_LEN) == 0) {
         // Handle create file
+        create_file(msg, ssl, res, ctx);
+        return res;
       }
       break;
     case PUT:

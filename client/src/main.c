@@ -6,7 +6,7 @@ int main(void){
   SSL_CTX* ctx = setup_client();
   SSL* ssl = connect_to_server(ctx);
   Session session = login(ssl);
-  cli_loop(&session);
+  cli_loop(&session, ssl);
   disconnect_server(ssl, ctx);
 
   return EXIT_SUCCESS;

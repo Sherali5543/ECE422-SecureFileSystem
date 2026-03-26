@@ -223,4 +223,5 @@ void send_response(SSL* ssl, http_message_t* response);
  */
 void send_request(SSL* ssl, http_message_t* response);
 void test_read_message_contents(http_message_t *msg);
+int drain_body(SSL* ssl, size_t len);
 #endif

@@ -8,7 +8,7 @@
 #include "server_context.h"
 #include "tls.h"
 
-void handle_client(SSL* ssl) {
+void handle_client(SSL* ssl, server_context_t *ctx) {
   while (1) {
     printf("---------Reading request\n");
     http_message_t* msg = read_request(ssl);
@@ -18,7 +18,7 @@ void handle_client(SSL* ssl) {
     }
 
     printf("-------Handling request\n");
-    http_message_t* response = handle_request(msg, ssl);
+    http_message_t* response = handle_request(msg, ssl, ctx);
     free(msg);
     if (response == NULL) {
       printf("No response\n");
@@ -52,7 +52,7 @@ void server_loop(void) {
     if (ssl == NULL) continue;
 
     // handle client
-    handle_client(ssl);
+    handle_client(ssl, &server_ctx);
     int ret = SSL_shutdown(ssl);
     if (ret < 0) {
       printf("Error closing\n");

@@ -3,6 +3,23 @@
 
 #include "http.h"
 
+int drain_body(SSL* ssl, size_t len) {
+  char buf[1024];
+  size_t total = 0;
+
+  while (total < len) {
+    size_t want = len - total;
+    if (want > sizeof(buf)) want = sizeof(buf);
+
+    ssize_t n = tls_read(ssl, buf, want);
+    if (n <= 0) return -1;
+
+    total += (size_t)n;
+  }
+
+  return 0;
+}
+
 http_message_t* init_request(void) {
   http_message_t* msg = malloc(sizeof(http_message_t));
   memset(msg, 0, sizeof(http_message_t));
@@ -10,6 +27,7 @@ http_message_t* init_request(void) {
   msg->method = UNKNOWN;
   msg->content_type = NONE;
   strncpy(msg->path, "/", sizeof(msg->path));
+  strncpy(msg->connection, "keep-alive", sizeof(msg->connection));
   return msg;
 }
 
@@ -117,6 +135,9 @@ void send_response(SSL* ssl, http_message_t* response) {
   char buf[HTTP_MAX_PREAMBLE_LEN];
   memset(buf, 0, HTTP_MAX_PREAMBLE_LEN);
   ssize_t header_len = http_build_header(response, buf, RESPONSE);
+  printf("------BUILT RESOPNSE---------\n");
+  test_read_message_contents(response);
+  printf("%s\n", buf);
   if (header_len < 0) return;
   ssize_t nwritten = tls_write(ssl, buf, (size_t)header_len);
   if (nwritten <= 0) return;
@@ -127,6 +148,9 @@ void send_request(SSL* ssl, http_message_t* response) {
   char buf[HTTP_MAX_PREAMBLE_LEN];
   memset(buf, 0, HTTP_MAX_PREAMBLE_LEN);
   ssize_t header_len = http_build_header(response, buf, REQUEST);
+  printf("------BUILT REQUEST---------\n");
+  test_read_message_contents(response);
+  printf("%s\n", buf);
   if (header_len < 0) return;
   ssize_t nwritten = tls_write(ssl, buf, (size_t)header_len);
   if (nwritten <= 0) return;
