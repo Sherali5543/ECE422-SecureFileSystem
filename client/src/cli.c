@@ -10,8 +10,11 @@ login, logout, ls, cd, mkdir, create, read, write, rm, and mv
 
 #define MAX_ARGS 3
 
-void create_file_test(SSL* ssl) {
+static void create_file_command(SSL* ssl, const char* filepath) {
   http_message_t* req = init_request();
+  http_message_t* res = NULL;
+  cJSON* json = NULL;
+  char* body = NULL;
 
   req->method = POST;
   strncpy(req->path, "/files", HTTP_MAX_PATH_LEN);
@@ -22,16 +25,16 @@ void create_file_test(SSL* ssl) {
 
   strncpy(req->connection, "close", HTTP_MAX_HEADER_VALUE - 1);
 
-  cJSON* json = cJSON_CreateObject();
-  cJSON_AddStringToObject(json, "filepath", "/home/alice/docs/a.pdf");
+  json = cJSON_CreateObject();
+  cJSON_AddStringToObject(json, "filepath", filepath);
 
-  char* body = cJSON_PrintUnformatted(json);
+  body = cJSON_PrintUnformatted(json);
   req->content_length = strlen(body);
 
   send_request(ssl, req);
   tls_write(ssl, body, req->content_length);
 
-  http_message_t* res = read_response(ssl);
+  res = read_response(ssl);
 
   if (res && res->content_length > 0) {
     char* resp_body = calloc(res->content_length + 1, 1);
@@ -72,7 +75,11 @@ void cli_loop(Session* session, SSL* ssl) {
     } else if (strcmp(cmd, "mv") == 0) {
       printf("'mv' not yet implemented!\n");
     } else if (strcmp(cmd, "create") == 0) {
-      create_file_test(ssl);
+      if (args[1] == NULL) {
+        printf("usage: create <absolute-path>\n");
+      } else {
+        create_file_command(ssl, args[1]);
+      }
     } else if (strcmp(cmd, "logout") == 0) {
       destroy_session(session);
       free(input);
