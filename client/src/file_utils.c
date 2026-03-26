@@ -11,6 +11,12 @@
 #include <stdbool.h>
 #include <unistd.h>
 
+enum ACCESS_TYPE {
+    OWNER,
+    GROUP,
+    OTHER
+};
+
 // youll have to free the metadata when you are done
 http_message_t* request_metadata(char* filepath, Session* s){
     http_message_t* msg = init_request();
@@ -18,7 +24,7 @@ http_message_t* request_metadata(char* filepath, Session* s){
 
     char request_endpoint[512];
     snprintf(request_endpoint, sizeof(request_endpoint), 
-        "/files/content?path=%s", filepath);
+        "/files/path=%s", filepath);
     
     strncpy(msg->path, request_endpoint, HTTP_MAX_PATH_LEN);
     send_request(s->ssl, msg);
@@ -70,9 +76,30 @@ void write_file(char* pwd, char* filename, Session* s){
     snprintf(filepath, sizeof(filepath), 
         "%s/%s", pwd, filename);
     
-    http_message_t* metadata = request_metadata(pwd, s);
-    // do some checks on metadata before contiuning
-    // need to determine the type of decryption we do
+    // http_message_t* metadata = request_metadata(pwd, s);
+    // // do some checks on metadata before contiuning
+    // // need to determine the type of decryption we do
+    // char* md_buf = calloc(metadata->content_length + 1, 1);
+    // read_message_body(s->ssl, metadata, md_buf,metadata->content_length);
+
+    // cJSON* md_json = cJSON_Parse(md_buf);
+
+
+    // cJSON* key_json;
+    // char* key;
+    // if(cJSON_HasObjectItem(md_json, "wrapped_fek_owner")){
+    //     key_json = cJSON_GetObjectItem(md_json, "wrapped_fek_owner");
+    //     key = key_json->valuestring;
+    // } else if (cJSON_HasObjectItem(md_json, "wrapped_fek_group")){
+    //     key_json = cJSON_GetObjectItem(md_json, "wrapped_fek_group");
+    //     key = key_json->valuestring;
+    // } else if (cJSON_HasObjectItem(md_json, "wrapped_fek_other")){
+    //     key_json = cJSON_GetObjectItem(md_json, "wrapped_fek_other");
+    //     key = key_json->valuestring;
+    // } else {
+    //     printf("panic!");
+    //     return;
+    // }
 
     // ask server for file
     http_message_t* msg = init_request();
@@ -80,7 +107,7 @@ void write_file(char* pwd, char* filename, Session* s){
 
     char request_endpoint[512];
     snprintf(request_endpoint, sizeof(request_endpoint), 
-        "/files/content?path=%s/%s", pwd, filename);
+        "/files/contents?filepath=%s/%s", pwd, filename);
 
     strncpy(msg->path, request_endpoint, HTTP_MAX_PATH_LEN);
 
@@ -89,25 +116,42 @@ void write_file(char* pwd, char* filename, Session* s){
     destroy_message(msg);
     
     //get back request
-    msg = read_response(s->ssl);
-    // decrypt file
-    
+    // msg = read_response(s->ssl);
+   
+    // cJSON* key_json = msg->
+
     // create temp file and open it with the contents of the file
+    char* buffer = calloc(msg->content_length + 1, 1);
+    read_message_body(s->ssl, msg, buffer,msg->content_length);
 
     char template[] = "/tmp/sfs_write_XXXXXX";
     int fd = mkstemp(template);
+    
+    write(fd, buffer, msg->content_length);
+    close(fd);
 
-    if (fd == -1) {
-        perror("mkstemp");
-        return;
-    }
-    close(fd); 
+    // decrypt file
+    decrypt_file();
 
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "vi %s", template);
     system(cmd);
 
+    char* encrypted_file = encrypt_file()
+
     // send updated file to server
+    http_message_t* final_msg = init_request();
+    final_msg->method = PUT;
+
+    char f_request_endpoint[512];
+    snprintf(f_request_endpoint, sizeof(f_request_endpoint), 
+        "/files/content?filepath=%s/%s", pwd, filename);
+
+    strncpy(final_msg->path, f_request_endpoint, HTTP_MAX_PATH_LEN);
+
+    send_request(s->ssl, final_msg);
+    tls_write(s->ssl, NULL, 0);
+    destroy_message(final_msg);
 }
 
 void create_file(char* filepath, char* filename, Session* s){
@@ -136,6 +180,10 @@ void create_file(char* filepath, char* filename, Session* s){
     char* wrapped = NULL;
     wrapped = encrypt_wrapped_user_key(s->user_keys, file_key);
 
+    // char* hash = generate_file_hash(encrypted_file);
+
+    // char* signature
+
     unlink(encrypted_file);
 
     // send to server
@@ -148,9 +196,8 @@ void create_file(char* filepath, char* filename, Session* s){
 
     char fullpath[512];
     snprintf(fullpath, sizeof(fullpath), "%s/%s", filepath, filename);
-    cJSON_AddStringToObject(json, "path", fullpath);
-    cJSON_AddStringToObject(json, "wrapped_fek_owner", wrapped);
-    
+    cJSON_AddStringToObject(json, "filepath", fullpath);
+    cJSON_AddStringToObject(json, "wrapped_fek_owner", wrapped);    
 
     char* body = cJSON_PrintUnformatted(json);
     msg->content_length = strlen(body);
