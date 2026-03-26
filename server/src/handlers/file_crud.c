@@ -1800,6 +1800,101 @@ cleanup:
   free(children);
 }
 
+void get_file_metadata(http_message_t* msg, SSL* ssl, http_message_t* response,
+                       server_context_t* ctx) {
+  filepath_query_t query = {0};
+  server_session_t session;
+  db_file_metadata_t meta;
+  cJSON* root = NULL;
+  char* json = NULL;
+  char path[DB_FILE_PATH_MAX];
+  char name[DB_FILE_NAME_MAX];
+  int rc = 0;
+
+  if (!msg || !ssl || !response || !ctx) {
+    return;
+  }
+  if (msg->auth_token[0] == '\0') {
+    send_json_error(ssl, response, 401, "Unauthorized",
+                    "{\"error\":\"missing bearer token\"}");
+    return;
+  }
+  if (parse_filepath_query(msg, &query) != 0) {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"missing or invalid filepath query\"}");
+    return;
+  }
+  if (get_user_from_token(ctx, msg->auth_token, &session) != 0) {
+    send_json_error(ssl, response, 401, "Unauthorized",
+                    "{\"error\":\"invalid or expired token\"}");
+    return;
+  }
+
+  rc = db_find_file_metadata_by_path(ctx, query.filepath, strlen(query.filepath),
+                                     &meta);
+  if (rc == -1) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to load metadata\"}");
+    return;
+  }
+  if (rc == 0) {
+    send_json_error(ssl, response, 404, "Not Found",
+                    "{\"error\":\"path not found\"}");
+    return;
+  }
+
+  if ((strcmp(meta.object_type, "directory") == 0 &&
+       !can_access_directory(ctx, session.user_id, &meta, 0400, 0040, 0004)) ||
+      (strcmp(meta.object_type, "file") == 0 &&
+       !can_access_file(ctx, session.user_id, &meta, 0400, 0040, 0004))) {
+    send_json_error(ssl, response, 403, "Forbidden",
+                    "{\"error\":\"insufficient permissions\"}");
+    return;
+  }
+
+  if (blob_to_cstring(meta.path, meta.path_len, path, sizeof(path)) != 0 ||
+      blob_to_cstring(meta.name, meta.name_len, name, sizeof(name)) != 0) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to prepare metadata response\"}");
+    return;
+  }
+
+  root = cJSON_CreateObject();
+  if (root == NULL) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"response build failure\"}");
+    return;
+  }
+
+  cJSON_AddStringToObject(root, "path", path);
+  cJSON_AddStringToObject(root, "name", name);
+  cJSON_AddStringToObject(root, "object_type", meta.object_type);
+  cJSON_AddNumberToObject(root, "owner_id", meta.owner_id);
+  if (meta.has_group_id) {
+    cJSON_AddNumberToObject(root, "group_id", meta.group_id);
+  } else {
+    cJSON_AddNullToObject(root, "group_id");
+  }
+  cJSON_AddNumberToObject(root, "mode_bits", meta.mode_bits);
+  cJSON_AddNumberToObject(root, "created_at", (double)meta.created_at);
+  cJSON_AddNumberToObject(root, "updated_at", (double)meta.updated_at);
+
+  json = cJSON_PrintUnformatted(root);
+  if (json == NULL) {
+    cJSON_Delete(root);
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"response build failure\"}");
+    return;
+  }
+
+  set_json_response(response, 200, "OK", strlen(json));
+  send_response(ssl, response);
+  write_json_body(ssl, json);
+
+  free(json);
+  cJSON_Delete(root);
+}
+
 void move_file(http_message_t* msg, SSL* ssl, http_message_t* response,
                server_context_t* ctx) {
   move_file_request_t req = {0};

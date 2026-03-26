@@ -21,6 +21,14 @@ typedef struct {
     size_t body_len;
 } client_response_t;
 
+typedef struct {
+    int has_group;
+    char group_name[SESSION_GROUP_NAME_MAX];
+} path_scope_info_t;
+
+static int load_group_key(SSL* ssl, Session* session, const char* group_name,
+                          unsigned char* out_key);
+
 static void cleanup_response(client_response_t* response) {
     if (response == NULL) {
         return;
@@ -292,6 +300,40 @@ static int normalize_path(const char* cwd, const char* input, char* out,
     return 0;
 }
 
+static int is_parent_prefix(const char* parent, const char* child) {
+    size_t parent_len = 0;
+
+    if (parent == NULL || child == NULL) {
+        return 0;
+    }
+    if (strcmp(parent, "/") == 0) {
+        return child[0] == '/';
+    }
+
+    parent_len = strlen(parent);
+    return strncmp(parent, child, parent_len) == 0 &&
+           (child[parent_len] == '/' || child[parent_len] == '\0');
+}
+
+static int build_child_path(const char* parent, const char* name, char* out,
+                            size_t out_len) {
+    if (parent == NULL || name == NULL || out == NULL || out_len == 0) {
+        return -1;
+    }
+
+    if (strcmp(parent, "/") == 0) {
+        return snprintf(out, out_len, "/%s", name) >= 0 &&
+                       (size_t)snprintf(out, out_len, "/%s", name) < out_len
+                   ? 0
+                   : -1;
+    }
+
+    return snprintf(out, out_len, "%s/%s", parent, name) >= 0 &&
+                   (size_t)snprintf(out, out_len, "%s/%s", parent, name) < out_len
+               ? 0
+               : -1;
+}
+
 static void print_response_error(const char* action,
                                  const client_response_t* response) {
     if (response == NULL || response->msg == NULL) {
@@ -366,6 +408,180 @@ static int perform_request(SSL* ssl, http_method_t method, const char* path,
             return -1;
         }
         out_response->body[out_response->body_len] = '\0';
+    }
+
+    return 0;
+}
+
+static int cache_path_scope(Session* session, const char* logical_path,
+                            const char* group_name) {
+    size_t i = 0;
+    size_t slot = SESSION_MAX_PATH_SCOPES;
+
+    if (session == NULL || logical_path == NULL) {
+        return -1;
+    }
+
+    for (i = 0; i < SESSION_MAX_PATH_SCOPES; i++) {
+        if (session->path_scopes[i].in_use &&
+            strcmp(session->path_scopes[i].logical_path, logical_path) == 0) {
+            session->path_scopes[i].has_group = group_name != NULL;
+            if (group_name != NULL) {
+                strncpy(session->path_scopes[i].group_name, group_name,
+                        sizeof(session->path_scopes[i].group_name) - 1);
+                session->path_scopes[i]
+                    .group_name[sizeof(session->path_scopes[i].group_name) - 1] =
+                    '\0';
+            } else {
+                session->path_scopes[i].group_name[0] = '\0';
+            }
+            return 0;
+        }
+        if (!session->path_scopes[i].in_use && slot == SESSION_MAX_PATH_SCOPES) {
+            slot = i;
+        }
+    }
+
+    if (slot == SESSION_MAX_PATH_SCOPES) {
+        return -1;
+    }
+
+    session->path_scopes[slot].in_use = 1;
+    strncpy(session->path_scopes[slot].logical_path, logical_path,
+            sizeof(session->path_scopes[slot].logical_path) - 1);
+    session->path_scopes[slot]
+        .logical_path[sizeof(session->path_scopes[slot].logical_path) - 1] = '\0';
+    session->path_scopes[slot].has_group = group_name != NULL;
+    if (group_name != NULL) {
+        strncpy(session->path_scopes[slot].group_name, group_name,
+                sizeof(session->path_scopes[slot].group_name) - 1);
+        session->path_scopes[slot]
+            .group_name[sizeof(session->path_scopes[slot].group_name) - 1] = '\0';
+    } else {
+        session->path_scopes[slot].group_name[0] = '\0';
+    }
+    return 0;
+}
+
+static int lookup_path_scope(Session* session, const char* logical_path,
+                             path_scope_info_t* out_scope) {
+    size_t i = 0;
+    size_t best_len = 0;
+
+    if (session == NULL || logical_path == NULL || out_scope == NULL) {
+        return -1;
+    }
+
+    memset(out_scope, 0, sizeof(*out_scope));
+    for (i = 0; i < SESSION_MAX_PATH_SCOPES; i++) {
+        size_t len = 0;
+
+        if (!session->path_scopes[i].in_use ||
+            !is_parent_prefix(session->path_scopes[i].logical_path, logical_path)) {
+            continue;
+        }
+
+        len = strlen(session->path_scopes[i].logical_path);
+        if (len < best_len) {
+            continue;
+        }
+
+        best_len = len;
+        out_scope->has_group = session->path_scopes[i].has_group;
+        if (session->path_scopes[i].has_group) {
+            strncpy(out_scope->group_name, session->path_scopes[i].group_name,
+                    sizeof(out_scope->group_name) - 1);
+            out_scope->group_name[sizeof(out_scope->group_name) - 1] = '\0';
+        } else {
+            out_scope->group_name[0] = '\0';
+        }
+    }
+
+    return 0;
+}
+
+static int resolve_scope_key(SSL* ssl, Session* session,
+                             const path_scope_info_t* scope,
+                             unsigned char* out_key) {
+    if (session == NULL || scope == NULL || out_key == NULL) {
+        return -1;
+    }
+
+    if (scope->has_group) {
+        return load_group_key(ssl, session, scope->group_name, out_key);
+    }
+
+    return derive_private_name_key(session->user_keys, out_key);
+}
+
+static int encrypt_logical_path(SSL* ssl, Session* session,
+                                const char* logical_path, char* out_path,
+                                size_t out_len) {
+    char work[SESSION_PATH_MAX];
+    char plaintext_parent[SESSION_PATH_MAX];
+    char current_plain[SESSION_PATH_MAX];
+    char* token = NULL;
+    char* saveptr = NULL;
+    path_scope_info_t scope = {0};
+    unsigned char name_key[crypto_secretbox_KEYBYTES];
+
+    if (ssl == NULL || session == NULL || logical_path == NULL || out_path == NULL ||
+        out_len == 0) {
+        return -1;
+    }
+
+    if (strcmp(logical_path, "/") == 0) {
+        if (out_len < 2) {
+            return -1;
+        }
+        strcpy(out_path, "/");
+        return 0;
+    }
+
+    strncpy(work, logical_path, sizeof(work) - 1);
+    work[sizeof(work) - 1] = '\0';
+    strncpy(plaintext_parent, "/", sizeof(plaintext_parent) - 1);
+    plaintext_parent[sizeof(plaintext_parent) - 1] = '\0';
+    out_path[0] = '\0';
+
+    token = strtok_r(work, "/", &saveptr);
+    while (token != NULL) {
+        char* enc_component = NULL;
+        size_t current_len = strlen(out_path);
+
+        if (lookup_path_scope(session, plaintext_parent, &scope) != 0 ||
+            resolve_scope_key(ssl, session, &scope, name_key) != 0) {
+            return -1;
+        }
+
+        enc_component = encrypt_name_component_hex(name_key, token);
+        if (enc_component == NULL) {
+            return -1;
+        }
+
+        if (current_len == 0) {
+            if (snprintf(out_path, out_len, "/%s", enc_component) < 0 ||
+                strlen(out_path) >= out_len) {
+                free(enc_component);
+                return -1;
+            }
+        } else {
+            if (snprintf(out_path + current_len, out_len - current_len, "/%s",
+                         enc_component) < 0 ||
+                strlen(out_path) >= out_len) {
+                free(enc_component);
+                return -1;
+            }
+        }
+
+        free(enc_component);
+        if (build_child_path(plaintext_parent, token, current_plain,
+                             sizeof(current_plain)) != 0) {
+            return -1;
+        }
+        strncpy(plaintext_parent, current_plain, sizeof(plaintext_parent) - 1);
+        plaintext_parent[sizeof(plaintext_parent) - 1] = '\0';
+        token = strtok_r(NULL, "/", &saveptr);
     }
 
     return 0;
@@ -574,15 +790,31 @@ cleanup:
     return rc;
 }
 
+static int fetch_metadata_for_path(SSL* ssl, Session* session, const char* path,
+                                   client_response_t* out_response) {
+    char encrypted_path[SESSION_PATH_MAX * 3];
+    char query[HTTP_MAX_QUERY_LEN];
+
+    if (ssl == NULL || session == NULL || path == NULL || out_response == NULL) {
+        return -1;
+    }
+
+    if (encrypt_logical_path(ssl, session, path, encrypted_path,
+                             sizeof(encrypted_path)) != 0) {
+        return -1;
+    }
+
+    snprintf(query, sizeof(query), "filepath=%s", encrypted_path);
+    return perform_request(ssl, GET, "/files/meta", query, session->token, NONE,
+                           NULL, 0, out_response);
+}
+
 static int fetch_group_info_for_path(SSL* ssl, Session* session,
                                      const char* path, int* out_group_id,
                                      int* out_has_group_id) {
     client_response_t response = {0};
     cJSON* json = NULL;
-    cJSON* entries_json = NULL;
-    char parent[SESSION_PATH_MAX];
-    char name[SESSION_PATH_MAX];
-    char query[HTTP_MAX_QUERY_LEN];
+    cJSON* group_id_json = NULL;
     int rc = -1;
 
     if (ssl == NULL || session == NULL || path == NULL || out_group_id == NULL ||
@@ -593,17 +825,11 @@ static int fetch_group_info_for_path(SSL* ssl, Session* session,
     *out_group_id = 0;
     *out_has_group_id = 0;
 
-    if (split_parent_child(path, parent, sizeof(parent), name, sizeof(name)) != 0) {
-        return -1;
-    }
-
-    snprintf(query, sizeof(query), "filepath=%s", parent);
-    if (perform_request(ssl, GET, "/files", query, session->token, NONE, NULL, 0,
-                        &response) != 0) {
+    if (fetch_metadata_for_path(ssl, session, path, &response) != 0) {
         return -1;
     }
     if (response.msg->status_code != 200) {
-        print_response_error("list parent directory", &response);
+        print_response_error("fetch path metadata", &response);
         goto cleanup;
     }
 
@@ -612,30 +838,12 @@ static int fetch_group_info_for_path(SSL* ssl, Session* session,
         goto cleanup;
     }
 
-    entries_json = cJSON_GetObjectItemCaseSensitive(json, "entries");
-    if (!cJSON_IsArray(entries_json)) {
-        goto cleanup;
+    group_id_json = cJSON_GetObjectItemCaseSensitive(json, "group_id");
+    if (cJSON_IsNumber(group_id_json)) {
+        *out_group_id = group_id_json->valueint;
+        *out_has_group_id = 1;
     }
-
-    cJSON* item = NULL;
-    cJSON_ArrayForEach(item, entries_json) {
-        cJSON* path_json = cJSON_GetObjectItemCaseSensitive(item, "path");
-        cJSON* group_id_json = cJSON_GetObjectItemCaseSensitive(item, "group_id");
-
-        if (!cJSON_IsString(path_json) || path_json->valuestring == NULL) {
-            continue;
-        }
-        if (strcmp(path_json->valuestring, path) != 0) {
-            continue;
-        }
-
-        if (cJSON_IsNumber(group_id_json)) {
-            *out_group_id = group_id_json->valueint;
-            *out_has_group_id = 1;
-        }
-        rc = 0;
-        break;
-    }
+    rc = 0;
 
 cleanup:
     cJSON_Delete(json);
@@ -760,6 +968,7 @@ static int resolve_file_key_from_read(SSL* ssl, Session* session,
 static int fetch_file_key(SSL* ssl, Session* session, const char* filepath,
                           unsigned char* out_key) {
     client_response_t response = {0};
+    char encrypted_filepath[SESSION_PATH_MAX * 3];
     char query[HTTP_MAX_QUERY_LEN];
     int rc = -1;
 
@@ -771,7 +980,12 @@ static int fetch_file_key(SSL* ssl, Session* session, const char* filepath,
         return 0;
     }
 
-    snprintf(query, sizeof(query), "filepath=%s", filepath);
+    if (encrypt_logical_path(ssl, session, filepath, encrypted_filepath,
+                             sizeof(encrypted_filepath)) != 0) {
+        return -1;
+    }
+
+    snprintf(query, sizeof(query), "filepath=%s", encrypted_filepath);
     if (perform_request(ssl, GET, "/files/contents", query, session->token, NONE,
                         NULL, 0, &response) != 0) {
         return -1;
@@ -793,6 +1007,28 @@ cleanup:
     return rc;
 }
 
+static int resolve_directory_name_key(SSL* ssl, Session* session,
+                                      const char* directory_path,
+                                      unsigned char* out_key,
+                                      path_scope_info_t* out_scope) {
+    path_scope_info_t scope = {0};
+
+    if (ssl == NULL || session == NULL || directory_path == NULL ||
+        out_key == NULL) {
+        return -1;
+    }
+
+    if (lookup_path_scope(session, directory_path, &scope) != 0 ||
+        resolve_scope_key(ssl, session, &scope, out_key) != 0) {
+        return -1;
+    }
+
+    if (out_scope != NULL) {
+        *out_scope = scope;
+    }
+    return 0;
+}
+
 static int command_pwd(Session* session) {
     if (session == NULL) {
         return -1;
@@ -807,7 +1043,9 @@ static int command_ls(SSL* ssl, Session* session, const char* path_arg) {
     cJSON* json = NULL;
     cJSON* entries = NULL;
     char path[SESSION_PATH_MAX];
+    char encrypted_path[SESSION_PATH_MAX * 3];
     char query[HTTP_MAX_QUERY_LEN];
+    unsigned char dir_key[crypto_secretbox_KEYBYTES];
 
     if (path_arg == NULL) {
         path_arg = ".";
@@ -816,8 +1054,14 @@ static int command_ls(SSL* ssl, Session* session, const char* path_arg) {
         fprintf(stderr, "Invalid path\n");
         return -1;
     }
+    if (encrypt_logical_path(ssl, session, path, encrypted_path,
+                             sizeof(encrypted_path)) != 0 ||
+        resolve_directory_name_key(ssl, session, path, dir_key, NULL) != 0) {
+        fprintf(stderr, "Failed to prepare encrypted directory path\n");
+        return -1;
+    }
 
-    snprintf(query, sizeof(query), "filepath=%s", path);
+    snprintf(query, sizeof(query), "filepath=%s", encrypted_path);
     if (perform_request(ssl, GET, "/files", query, session->token, NONE, NULL,
                         0, &response) != 0) {
         fprintf(stderr, "Failed to list directory\n");
@@ -842,13 +1086,42 @@ static int command_ls(SSL* ssl, Session* session, const char* path_arg) {
         cJSON* name_json = cJSON_GetObjectItemCaseSensitive(item, "name");
         cJSON* type_json = cJSON_GetObjectItemCaseSensitive(item, "object_type");
         cJSON* mode_json = cJSON_GetObjectItemCaseSensitive(item, "mode_bits");
+        cJSON* group_id_json = cJSON_GetObjectItemCaseSensitive(item, "group_id");
+        char* decrypted_name = NULL;
+        char child_path[SESSION_PATH_MAX];
 
         if (cJSON_IsString(name_json) && name_json->valuestring != NULL &&
             cJSON_IsString(type_json) && type_json->valuestring != NULL &&
             cJSON_IsNumber(mode_json)) {
+            decrypted_name =
+                decrypt_name_component_hex(dir_key, name_json->valuestring);
+            if (decrypted_name == NULL) {
+                continue;
+            }
             printf("%c %04o %s\n",
                    strcmp(type_json->valuestring, "directory") == 0 ? 'd' : '-',
-                   mode_json->valueint, name_json->valuestring);
+                   mode_json->valueint, decrypted_name);
+
+            if (strcmp(type_json->valuestring, "directory") == 0 &&
+                build_child_path(path, decrypted_name, child_path,
+                                 sizeof(child_path)) == 0) {
+                if (cJSON_IsNumber(group_id_json)) {
+                    char group_name[SESSION_GROUP_NAME_MAX];
+
+                    if (fetch_group_name_by_id(ssl, session, group_id_json->valueint,
+                                               group_name, sizeof(group_name)) == 0) {
+                        cache_path_scope(session, child_path, group_name);
+                    }
+                } else {
+                    path_scope_info_t inherited = {0};
+                    if (lookup_path_scope(session, path, &inherited) == 0) {
+                        cache_path_scope(session, child_path,
+                                         inherited.has_group ? inherited.group_name
+                                                             : NULL);
+                    }
+                }
+            }
+            free(decrypted_name);
         }
     }
 
@@ -860,6 +1133,7 @@ static int command_ls(SSL* ssl, Session* session, const char* path_arg) {
 static int command_cd(SSL* ssl, Session* session, const char* path_arg) {
     client_response_t response = {0};
     char path[SESSION_PATH_MAX];
+    char encrypted_path[SESSION_PATH_MAX * 3];
     char query[HTTP_MAX_QUERY_LEN];
     int rc = -1;
 
@@ -871,8 +1145,13 @@ static int command_cd(SSL* ssl, Session* session, const char* path_arg) {
         fprintf(stderr, "Invalid directory path\n");
         return -1;
     }
+    if (encrypt_logical_path(ssl, session, path, encrypted_path,
+                             sizeof(encrypted_path)) != 0) {
+        fprintf(stderr, "Failed to encrypt directory path\n");
+        return -1;
+    }
 
-    snprintf(query, sizeof(query), "filepath=%s", path);
+    snprintf(query, sizeof(query), "filepath=%s", encrypted_path);
     if (perform_request(ssl, GET, "/files", query, session->token, NONE, NULL,
                         0, &response) != 0) {
         fprintf(stderr, "Failed to query directory\n");
@@ -894,6 +1173,7 @@ static int command_cd(SSL* ssl, Session* session, const char* path_arg) {
 static int command_mkdir(SSL* ssl, Session* session, const char* path_arg) {
     client_response_t response = {0};
     char path[SESSION_PATH_MAX];
+    char encrypted_path[SESSION_PATH_MAX * 3];
     char json_body[CLIENT_RESPONSE_JSON_MAX];
 
     if (path_arg == NULL) {
@@ -904,8 +1184,13 @@ static int command_mkdir(SSL* ssl, Session* session, const char* path_arg) {
         fprintf(stderr, "Invalid directory path\n");
         return -1;
     }
+    if (encrypt_logical_path(ssl, session, path, encrypted_path,
+                             sizeof(encrypted_path)) != 0) {
+        fprintf(stderr, "Failed to encrypt directory path\n");
+        return -1;
+    }
 
-    snprintf(json_body, sizeof(json_body), "{\"dirpath\":\"%s\"}", path);
+    snprintf(json_body, sizeof(json_body), "{\"dirpath\":\"%s\"}", encrypted_path);
     if (perform_request(ssl, POST, "/directories", NULL, session->token, JSON,
                         (unsigned char*)json_body, strlen(json_body),
                         &response) != 0) {
@@ -927,6 +1212,7 @@ static int command_create(SSL* ssl, Session* session, const char* path_arg,
                           const char* group_name_arg) {
     client_response_t response = {0};
     char path[SESSION_PATH_MAX];
+    char encrypted_path[SESSION_PATH_MAX * 3];
     char owner_hex[(crypto_box_SEALBYTES +
                     crypto_secretstream_xchacha20poly1305_KEYBYTES) * 2 + 1];
     char group_hex[(crypto_secretbox_MACBYTES +
@@ -963,6 +1249,12 @@ static int command_create(SSL* ssl, Session* session, const char* path_arg,
                                    sizeof(parent_group_name)) == 0) {
             effective_group_name = parent_group_name;
         }
+    }
+
+    if (encrypt_logical_path(ssl, session, path, encrypted_path,
+                             sizeof(encrypted_path)) != 0) {
+        fprintf(stderr, "Failed to encrypt file path\n");
+        return -1;
     }
 
     allocated_file_key = generate_file_key();
@@ -1006,11 +1298,11 @@ static int command_create(SSL* ssl, Session* session, const char* path_arg,
         snprintf(json_body, sizeof(json_body),
                  "{\"filepath\":\"%s\",\"group_name\":\"%s\","
                  "\"wrapped_fek_owner\":\"%s\",\"wrapped_fek_group\":\"%s\"}",
-                 path, effective_group_name, owner_hex, group_hex);
+                 encrypted_path, effective_group_name, owner_hex, group_hex);
     } else {
         snprintf(json_body, sizeof(json_body),
                  "{\"filepath\":\"%s\",\"wrapped_fek_owner\":\"%s\"}",
-                 path, owner_hex);
+                 encrypted_path, owner_hex);
     }
 
     if (perform_request(ssl, POST, "/files", NULL, session->token, JSON,
@@ -1032,6 +1324,9 @@ static int command_create(SSL* ssl, Session* session, const char* path_arg,
     }
 
     cache_file_key(session, path, file_key);
+    if (effective_group_name != NULL) {
+        cache_path_scope(session, path, effective_group_name);
+    }
     printf("Created file %s\n", path);
     cleanup_response(&response);
     free(allocated_file_key);
@@ -1044,6 +1339,7 @@ static int command_write(SSL* ssl, Session* session, const char* local_path,
                          const char* remote_path_arg) {
     client_response_t response = {0};
     char remote_path[SESSION_PATH_MAX];
+    char encrypted_remote_path[SESSION_PATH_MAX * 3];
     char query[HTTP_MAX_QUERY_LEN];
     unsigned char file_key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
     unsigned char* encrypted_bytes = NULL;
@@ -1060,6 +1356,11 @@ static int command_write(SSL* ssl, Session* session, const char* local_path,
         fprintf(stderr, "Invalid remote file path\n");
         return -1;
     }
+    if (encrypt_logical_path(ssl, session, remote_path, encrypted_remote_path,
+                             sizeof(encrypted_remote_path)) != 0) {
+        fprintf(stderr, "Failed to encrypt remote file path\n");
+        return -1;
+    }
     if (fetch_file_key(ssl, session, remote_path, file_key) != 0) {
         fprintf(stderr, "Failed to load FEK for %s\n", remote_path);
         return -1;
@@ -1073,7 +1374,7 @@ static int command_write(SSL* ssl, Session* session, const char* local_path,
         return -1;
     }
 
-    snprintf(query, sizeof(query), "filepath=%s", remote_path);
+    snprintf(query, sizeof(query), "filepath=%s", encrypted_remote_path);
     if (perform_request(ssl, PUT, "/files/content", query, session->token, STREAM,
                         encrypted_bytes, encrypted_len, &response) != 0) {
         goto cleanup;
@@ -1100,6 +1401,7 @@ static int command_read(SSL* ssl, Session* session, const char* remote_path_arg,
                         const char* output_path) {
     client_response_t response = {0};
     char remote_path[SESSION_PATH_MAX];
+    char encrypted_remote_path[SESSION_PATH_MAX * 3];
     char query[HTTP_MAX_QUERY_LEN];
     unsigned char file_key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
     char* encrypted_path = NULL;
@@ -1117,8 +1419,13 @@ static int command_read(SSL* ssl, Session* session, const char* remote_path_arg,
         fprintf(stderr, "Invalid remote file path\n");
         return -1;
     }
+    if (encrypt_logical_path(ssl, session, remote_path, encrypted_remote_path,
+                             sizeof(encrypted_remote_path)) != 0) {
+        fprintf(stderr, "Failed to encrypt remote file path\n");
+        return -1;
+    }
 
-    snprintf(query, sizeof(query), "filepath=%s", remote_path);
+    snprintf(query, sizeof(query), "filepath=%s", encrypted_remote_path);
     if (perform_request(ssl, GET, "/files/contents", query, session->token, NONE,
                         NULL, 0, &response) != 0) {
         return -1;
@@ -1181,6 +1488,7 @@ cleanup:
 static int command_rm(SSL* ssl, Session* session, const char* path_arg) {
     client_response_t response = {0};
     char path[SESSION_PATH_MAX];
+    char encrypted_path[SESSION_PATH_MAX * 3];
     char query[HTTP_MAX_QUERY_LEN];
 
     if (path_arg == NULL) {
@@ -1191,8 +1499,13 @@ static int command_rm(SSL* ssl, Session* session, const char* path_arg) {
         fprintf(stderr, "Invalid file path\n");
         return -1;
     }
+    if (encrypt_logical_path(ssl, session, path, encrypted_path,
+                             sizeof(encrypted_path)) != 0) {
+        fprintf(stderr, "Failed to encrypt file path\n");
+        return -1;
+    }
 
-    snprintf(query, sizeof(query), "filepath=%s", path);
+    snprintf(query, sizeof(query), "filepath=%s", encrypted_path);
     if (perform_request(ssl, DELETE, "/files", query, session->token, NONE, NULL,
                         0, &response) != 0) {
         return -1;
@@ -1213,6 +1526,8 @@ static int command_mv(SSL* ssl, Session* session, const char* src_arg,
     client_response_t response = {0};
     char src[SESSION_PATH_MAX];
     char dst[SESSION_PATH_MAX];
+    char encrypted_src[SESSION_PATH_MAX * 3];
+    char encrypted_dst[SESSION_PATH_MAX * 3];
     char json_body[CLIENT_RESPONSE_JSON_MAX];
 
     if (src_arg == NULL || dst_arg == NULL) {
@@ -1224,10 +1539,17 @@ static int command_mv(SSL* ssl, Session* session, const char* src_arg,
         fprintf(stderr, "Invalid move path\n");
         return -1;
     }
+    if (encrypt_logical_path(ssl, session, src, encrypted_src,
+                             sizeof(encrypted_src)) != 0 ||
+        encrypt_logical_path(ssl, session, dst, encrypted_dst,
+                             sizeof(encrypted_dst)) != 0) {
+        fprintf(stderr, "Failed to encrypt move path\n");
+        return -1;
+    }
 
     snprintf(json_body, sizeof(json_body),
              "{\"source_filepath\":\"%s\",\"destination_filepath\":\"%s\"}",
-             src, dst);
+             encrypted_src, encrypted_dst);
     if (perform_request(ssl, POST, "/files/move", NULL, session->token, JSON,
                         (unsigned char*)json_body, strlen(json_body),
                         &response) != 0) {
@@ -1248,6 +1570,7 @@ static int command_chmod(SSL* ssl, Session* session, const char* mode_bits,
                          const char* path_arg) {
     client_response_t response = {0};
     char path[SESSION_PATH_MAX];
+    char encrypted_path[SESSION_PATH_MAX * 3];
     char owner_hex[(crypto_box_SEALBYTES +
                     crypto_secretstream_xchacha20poly1305_KEYBYTES) * 2 + 1];
     char group_hex[(crypto_secretbox_MACBYTES +
@@ -1268,6 +1591,11 @@ static int command_chmod(SSL* ssl, Session* session, const char* mode_bits,
     }
     if (normalize_path(session->cwd, path_arg, path, sizeof(path)) != 0) {
         fprintf(stderr, "Invalid path\n");
+        return -1;
+    }
+    if (encrypt_logical_path(ssl, session, path, encrypted_path,
+                             sizeof(encrypted_path)) != 0) {
+        fprintf(stderr, "Failed to encrypt path\n");
         return -1;
     }
     if (fetch_file_key(ssl, session, path, file_key) != 0) {
@@ -1324,12 +1652,12 @@ static int command_chmod(SSL* ssl, Session* session, const char* mode_bits,
         snprintf(json_body, sizeof(json_body),
                  "{\"filepath\":\"%s\",\"mode_bits\":\"%s\","
                  "\"wrapped_fek_owner\":\"%s\",\"wrapped_fek_group\":\"%s\"}",
-                 path, mode_bits, owner_hex, group_hex);
+                 encrypted_path, mode_bits, owner_hex, group_hex);
     } else {
         snprintf(json_body, sizeof(json_body),
                  "{\"filepath\":\"%s\",\"mode_bits\":\"%s\","
                  "\"wrapped_fek_owner\":\"%s\"}",
-                 path, mode_bits, owner_hex);
+                 encrypted_path, mode_bits, owner_hex);
     }
 
     if (perform_request(ssl, PATCH, "/files/permissions", NULL, session->token,
@@ -1598,10 +1926,20 @@ static void print_help(void) {
 void cli_loop(SSL* ssl, Session *session){
     char* args[MAX_ARGS];
     char* input = NULL;
+    char home_path[SESSION_PATH_MAX];
 
     if (ssl == NULL || session == NULL) {
         return;
     }
+
+    cache_path_scope(session, "/", NULL);
+    cache_path_scope(session, "/home", NULL);
+    if (session->username != NULL &&
+        snprintf(home_path, sizeof(home_path), "/home/%s", session->username) > 0 &&
+        strlen(home_path) < sizeof(home_path)) {
+        cache_path_scope(session, home_path, NULL);
+    }
+    cache_path_scope(session, session->cwd, NULL);
 
     while (true) {
         printf("%s:%s$ ", session->username, session->cwd);

@@ -87,6 +87,18 @@ char* encrypt_file(char* file_key, char* filepath);
 // must call unlink(file_path) when done using the file to destroy it
 char* decrypt_file(char* file_key, char* filepath);
 
+// derives the symmetric key used for deterministic private name encryption
+int derive_private_name_key(const UserKeys* user_keys,
+                            unsigned char out_key[crypto_secretbox_KEYBYTES]);
+
+// deterministically encrypts one logical path component and returns it as hex
+char* encrypt_name_component_hex(const unsigned char* name_key,
+                                 const char* component);
+
+// decrypts one hex-encoded encrypted path component
+char* decrypt_name_component_hex(const unsigned char* name_key,
+                                 const char* component_hex);
+
 int test_encryption();
 
 #endif

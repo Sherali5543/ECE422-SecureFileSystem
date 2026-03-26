@@ -25,6 +25,9 @@ http_message_t* handle_request(http_message_t* msg, SSL* ssl, server_context_t *
                  0) {
         read_file(msg, ssl, res, ctx);
         return res;
+      } else if (strncmp(msg->path, "/files/meta", HTTP_MAX_PATH_LEN) == 0) {
+        get_file_metadata(msg, ssl, res, ctx);
+        return res;
       } else if (strncmp(msg->path, "/files", HTTP_MAX_PATH_LEN) == 0) {
         get_files(msg, ssl, res, ctx);
         return res;

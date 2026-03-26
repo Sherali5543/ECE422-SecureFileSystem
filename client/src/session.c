@@ -253,8 +253,13 @@ int register_account(SSL* ssl) {
   char* pwd = NULL;
   char* request_body = NULL;
   char* response_body = NULL;
+  char* home_component = NULL;
+  char* user_home_component = NULL;
   char public_encryption_key_hex[crypto_box_PUBLICKEYBYTES * 2 + 1];
   char public_signing_key_hex[crypto_sign_PUBLICKEYBYTES * 2 + 1];
+  unsigned char private_name_key[crypto_secretbox_KEYBYTES];
+  char home_path[SESSION_PATH_MAX];
+  char user_home_path[SESSION_PATH_MAX];
   int rc = -1;
 
   printf("New username: ");
@@ -286,6 +291,20 @@ int register_account(SSL* ssl) {
     fprintf(stderr, "Failed to encode registration keys\n");
     goto cleanup;
   }
+  if (derive_private_name_key(user_keys, private_name_key) != 0) {
+    fprintf(stderr, "Failed to derive private name key\n");
+    goto cleanup;
+  }
+  home_component = encrypt_name_component_hex(private_name_key, "home");
+  user_home_component =
+      encrypt_name_component_hex(private_name_key, username);
+  if (home_component == NULL || user_home_component == NULL ||
+      snprintf(home_path, sizeof(home_path), "/%s", home_component) < 0 ||
+      snprintf(user_home_path, sizeof(user_home_path), "/%s/%s", home_component,
+               user_home_component) < 0) {
+    fprintf(stderr, "Failed to encode encrypted home paths\n");
+    goto cleanup;
+  }
 
   json = cJSON_CreateObject();
   if (!json) {
@@ -296,6 +315,10 @@ int register_account(SSL* ssl) {
   cJSON_AddStringToObject(json, "public_encryption_key",
                           public_encryption_key_hex);
   cJSON_AddStringToObject(json, "public_signing_key", public_signing_key_hex);
+  cJSON_AddStringToObject(json, "home_path", home_path);
+  cJSON_AddStringToObject(json, "home_name", home_component);
+  cJSON_AddStringToObject(json, "user_home_path", user_home_path);
+  cJSON_AddStringToObject(json, "user_home_name", user_home_component);
   request_body = cJSON_PrintUnformatted(json);
   cJSON_Delete(json);
   json = NULL;
@@ -323,6 +346,8 @@ cleanup:
   destroy_message(response);
   free(request_body);
   free(response_body);
+  free(home_component);
+  free(user_home_component);
   free(user_keys);
   free(sign_keys);
   free(username);

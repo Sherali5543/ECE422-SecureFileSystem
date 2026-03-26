@@ -28,6 +28,10 @@ typedef struct {
   const char* username;
   const char* public_encryption_key_hex;
   const char* public_signing_key_hex;
+  const char* home_path;
+  const char* home_name;
+  const char* user_home_path;
+  const char* user_home_name;
 } register_request_t;
 
 static void set_json_response(http_message_t* response, int status,
@@ -211,6 +215,10 @@ static int parse_register_request(http_message_t* msg, SSL* ssl,
   cJSON* username_json = NULL;
   cJSON* enc_key_json = NULL;
   cJSON* sign_key_json = NULL;
+  cJSON* home_path_json = NULL;
+  cJSON* home_name_json = NULL;
+  cJSON* user_home_path_json = NULL;
+  cJSON* user_home_name_json = NULL;
 
   if (!msg || !ssl || !response || !out) {
     return -1;
@@ -260,6 +268,12 @@ static int parse_register_request(http_message_t* msg, SSL* ssl,
       cJSON_GetObjectItemCaseSensitive(out->json, "public_encryption_key");
   sign_key_json =
       cJSON_GetObjectItemCaseSensitive(out->json, "public_signing_key");
+  home_path_json = cJSON_GetObjectItemCaseSensitive(out->json, "home_path");
+  home_name_json = cJSON_GetObjectItemCaseSensitive(out->json, "home_name");
+  user_home_path_json =
+      cJSON_GetObjectItemCaseSensitive(out->json, "user_home_path");
+  user_home_name_json =
+      cJSON_GetObjectItemCaseSensitive(out->json, "user_home_name");
 
   if (!cJSON_IsString(username_json) || username_json->valuestring == NULL ||
       username_json->valuestring[0] == '\0') {
@@ -279,10 +293,92 @@ static int parse_register_request(http_message_t* msg, SSL* ssl,
                     "{\"error\":\"public_signing_key is required\"}");
     return -1;
   }
+  if ((home_path_json != NULL &&
+       (!cJSON_IsString(home_path_json) || home_path_json->valuestring == NULL ||
+        home_path_json->valuestring[0] == '\0')) ||
+      (home_name_json != NULL &&
+       (!cJSON_IsString(home_name_json) || home_name_json->valuestring == NULL ||
+        home_name_json->valuestring[0] == '\0')) ||
+      (user_home_path_json != NULL &&
+       (!cJSON_IsString(user_home_path_json) ||
+        user_home_path_json->valuestring == NULL ||
+        user_home_path_json->valuestring[0] == '\0')) ||
+      (user_home_name_json != NULL &&
+       (!cJSON_IsString(user_home_name_json) ||
+        user_home_name_json->valuestring == NULL ||
+        user_home_name_json->valuestring[0] == '\0'))) {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"invalid encrypted home metadata\"}");
+    return -1;
+  }
 
   out->username = username_json->valuestring;
   out->public_encryption_key_hex = enc_key_json->valuestring;
   out->public_signing_key_hex = sign_key_json->valuestring;
+  out->home_path =
+      cJSON_IsString(home_path_json) ? home_path_json->valuestring : NULL;
+  out->home_name =
+      cJSON_IsString(home_name_json) ? home_name_json->valuestring : NULL;
+  out->user_home_path = cJSON_IsString(user_home_path_json)
+                            ? user_home_path_json->valuestring
+                            : NULL;
+  out->user_home_name = cJSON_IsString(user_home_name_json)
+                            ? user_home_name_json->valuestring
+                            : NULL;
+  return 0;
+}
+
+static int create_registration_home_directories(server_context_t* ctx,
+                                                const register_request_t* req,
+                                                int user_id) {
+  db_file_metadata_t home_meta;
+  db_file_metadata_t user_home_meta;
+  int ignored_id = 0;
+  long long now = (long long)time(NULL);
+
+  if (ctx == NULL || req == NULL) {
+    return -1;
+  }
+  if (req->home_path == NULL || req->home_name == NULL ||
+      req->user_home_path == NULL || req->user_home_name == NULL) {
+    return 0;
+  }
+
+  memset(&home_meta, 0, sizeof(home_meta));
+  memcpy(home_meta.path, req->home_path, strlen(req->home_path));
+  home_meta.path_len = strlen(req->home_path);
+  memcpy(home_meta.name, req->home_name, strlen(req->home_name));
+  home_meta.name_len = strlen(req->home_name);
+  home_meta.owner_id = user_id;
+  home_meta.mode_bits = 0750;
+  strncpy(home_meta.object_type, "directory", sizeof(home_meta.object_type) - 1);
+  home_meta.created_at = now;
+  home_meta.updated_at = now;
+
+  memset(&user_home_meta, 0, sizeof(user_home_meta));
+  memcpy(user_home_meta.path, req->user_home_path, strlen(req->user_home_path));
+  user_home_meta.path_len = strlen(req->user_home_path);
+  memcpy(user_home_meta.name, req->user_home_name, strlen(req->user_home_name));
+  user_home_meta.name_len = strlen(req->user_home_name);
+  user_home_meta.owner_id = user_id;
+  user_home_meta.mode_bits = 0750;
+  strncpy(user_home_meta.object_type, "directory",
+          sizeof(user_home_meta.object_type) - 1);
+  user_home_meta.created_at = now;
+  user_home_meta.updated_at = now;
+
+  if (db_create_file_metadata(ctx, &home_meta, &ignored_id) != 0 &&
+      db_find_file_metadata_by_path(ctx, req->home_path, strlen(req->home_path),
+                                    &home_meta) < 0) {
+    return -1;
+  }
+  if (db_create_file_metadata(ctx, &user_home_meta, &ignored_id) != 0 &&
+      db_find_file_metadata_by_path(ctx, req->user_home_path,
+                                    strlen(req->user_home_path),
+                                    &user_home_meta) < 0) {
+    return -1;
+  }
+
   return 0;
 }
 
@@ -596,6 +692,13 @@ void register_user(http_message_t* msg, SSL* ssl, http_message_t* response,
                      public_signing_key_len, &user_id) != 0) {
     send_json_error(ssl, response, 500, "Internal Server Error",
                     "{\"error\":\"failed to create user\"}");
+    cleanup_register_request(&req);
+    return;
+  }
+
+  if (create_registration_home_directories(ctx, &req, user_id) != 0) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to create encrypted home directories\"}");
     cleanup_register_request(&req);
     return;
   }
