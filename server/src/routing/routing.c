@@ -12,7 +12,10 @@ http_message_t* handle_request(http_message_t* msg, SSL* ssl, server_context_t *
 
   switch (msg->method) {
     case GET:
-      if (strncmp(msg->path, "/files", HTTP_MAX_PATH_LEN) == 0) {
+      if (strncmp(msg->path, "/groups", HTTP_MAX_PATH_LEN) == 0) {
+        list_user_groups(msg, ssl, res, ctx);
+        return res;
+      } else if (strncmp(msg->path, "/files", HTTP_MAX_PATH_LEN) == 0) {
         // get_files(msg, ssl, res); // Ls/cd
         return res;
       } else if (strncmp(msg->path, "/files/contents", HTTP_MAX_PATH_LEN) ==
@@ -39,6 +42,13 @@ http_message_t* handle_request(http_message_t* msg, SSL* ssl, server_context_t *
         // Handle mv
       } else if (strncmp(msg->path, "/directories", HTTP_MAX_PATH_LEN) == 0) {
         // Handle mkdir
+      } else if (strncmp(msg->path, "/groups/members", HTTP_MAX_PATH_LEN) ==
+                 0) {
+        add_group_member(msg, ssl, res, ctx);
+        return res;
+      } else if (strncmp(msg->path, "/groups", HTTP_MAX_PATH_LEN) == 0) {
+        create_group(msg, ssl, res, ctx);
+        return res;
       } else if (strncmp(msg->path, "/files", HTTP_MAX_PATH_LEN) == 0) {
         // Handle create file
         create_file(msg, ssl, res, ctx);
@@ -57,7 +67,10 @@ http_message_t* handle_request(http_message_t* msg, SSL* ssl, server_context_t *
       }
       break;
     case DELETE:
-      if (strncmp(msg->path, "/files", HTTP_MAX_PATH_LEN) == 0) {
+      if (strncmp(msg->path, "/groups/members", HTTP_MAX_PATH_LEN) == 0) {
+        remove_group_member(msg, ssl, res, ctx);
+        return res;
+      } else if (strncmp(msg->path, "/files", HTTP_MAX_PATH_LEN) == 0) {
         delete_file(msg, ssl, res, ctx);
         return res;
       }
