@@ -35,4 +35,6 @@ void remove_group_member(http_message_t* msg, SSL* ssl,
                          http_message_t* response, server_context_t* ctx);
 void list_user_groups(http_message_t* msg, SSL* ssl, http_message_t* response,
                       server_context_t* ctx);
+void get_group_key(http_message_t* msg, SSL* ssl, http_message_t* response,
+                   server_context_t* ctx);
 #endif

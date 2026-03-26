@@ -12,7 +12,10 @@ http_message_t* handle_request(http_message_t* msg, SSL* ssl, server_context_t *
 
   switch (msg->method) {
     case GET:
-      if (strncmp(msg->path, "/groups", HTTP_MAX_PATH_LEN) == 0) {
+      if (strncmp(msg->path, "/groups/key", HTTP_MAX_PATH_LEN) == 0) {
+        get_group_key(msg, ssl, res, ctx);
+        return res;
+      } else if (strncmp(msg->path, "/groups", HTTP_MAX_PATH_LEN) == 0) {
         list_user_groups(msg, ssl, res, ctx);
         return res;
       } else if (strncmp(msg->path, "/files/contents", HTTP_MAX_PATH_LEN) ==

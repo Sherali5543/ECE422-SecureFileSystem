@@ -35,13 +35,16 @@ Request body:
 ```json
 {
   "filepath": "/home/alice/docs/a.txt",
+  "group_name": "devs",
   "wrapped_fek_owner": "a1b2c3d4",
   "wrapped_fek_group": "deadbeef",
   "wrapped_fek_other": "00112233"
 }
 ```
 
-Wrapped FEKs are sent as hex strings. `wrapped_fek_owner` is required. `wrapped_fek_group` and `wrapped_fek_other` are optional.
+Wrapped FEKs are sent as hex strings. `wrapped_fek_owner` is required. `group_name`, `wrapped_fek_group`, and `wrapped_fek_other` are optional.
+
+If `group_name` is provided, the caller must already be a member of that group. When group access is enabled for the new file, the client must also send `wrapped_fek_group`.
 
 Success response:
 
@@ -70,7 +73,7 @@ Example:
 curl -k -X POST https://localhost:8443/files \
   -H "Authorization: Bearer test-token-alice-123" \
   -H "Content-Type: application/json" \
-  -d '{"filepath":"/home/alice/docs/a.txt","wrapped_fek_owner":"a1b2c3d4","wrapped_fek_group":"deadbeef","wrapped_fek_other":"00112233"}'
+  -d '{"filepath":"/home/alice/docs/a.txt","group_name":"devs","wrapped_fek_owner":"a1b2c3d4","wrapped_fek_group":"deadbeef","wrapped_fek_other":"00112233"}'
 ```
 
 ### Write File Contents
@@ -363,7 +366,7 @@ Common error cases:
 
 ### Create Group
 
-Create a new group name in the database.
+Create a new group and store the creator as both the group owner and the first group member.
 
 - Method: `POST`
 - Path: `/groups`
@@ -373,9 +376,12 @@ Request body:
 
 ```json
 {
-  "group_name": "devs"
+  "group_name": "devs",
+  "wrapped_group_key": "a1b2c3d4"
 }
 ```
+
+`wrapped_group_key` is the new group key wrapped for the creator, encoded as hex.
 
 Success response:
 
@@ -386,13 +392,14 @@ Success response:
 {
   "message": "group created",
   "group_name": "devs",
-  "group_id": 3
+  "group_id": 3,
+  "owner_id": 1
 }
 ```
 
 Common error cases:
 
-- `400 Bad Request` for invalid `group_name`
+- `400 Bad Request` for invalid `group_name` or `wrapped_group_key`
 - `401 Unauthorized` for missing or bad token
 - `409 Conflict` if the group already exists
 
@@ -402,7 +409,7 @@ Example:
 curl -k -X POST https://localhost:8443/groups \
   -H "Authorization: Bearer test-token-alice-123" \
   -H "Content-Type: application/json" \
-  -d '{"group_name":"devs"}'
+  -d '{"group_name":"devs","wrapped_group_key":"a1b2c3d4"}'
 ```
 
 ### Add User To Group
@@ -419,7 +426,7 @@ Request body:
 {
   "group_name": "devs",
   "username": "bob",
-  "wrapped_group_key": "demo-key"
+  "wrapped_group_key": "b2c3d4e5"
 }
 ```
 
@@ -438,6 +445,7 @@ Common error cases:
 
 - `400 Bad Request` for invalid JSON fields
 - `401 Unauthorized` for missing or bad token
+- `403 Forbidden` if the caller is not the group owner
 - `404 Not Found` if the group or user does not exist
 - `409 Conflict` if the user is already in the group
 
@@ -447,7 +455,7 @@ Example:
 curl -k -X POST https://localhost:8443/groups/members \
   -H "Authorization: Bearer test-token-alice-123" \
   -H "Content-Type: application/json" \
-  -d '{"group_name":"devs","username":"bob","wrapped_group_key":"demo-key"}'
+  -d '{"group_name":"devs","username":"bob","wrapped_group_key":"b2c3d4e5"}'
 ```
 
 ### Remove User From Group
@@ -482,7 +490,44 @@ Common error cases:
 
 - `400 Bad Request` for invalid JSON fields
 - `401 Unauthorized` for missing or bad token
+- `403 Forbidden` if the caller is not the group owner
 - `404 Not Found` if the group or user does not exist, or if the user is not in the group
+
+### Get Wrapped Group Key
+
+Return the current caller's wrapped group key for a specific group.
+
+- Method: `GET`
+- Path: `/groups/key`
+- Query: `group_name=<group_name>`
+
+Example request:
+
+```bash
+curl -k "https://localhost:8443/groups/key?group_name=devs" \
+  -H "Authorization: Bearer test-token-alice-123"
+```
+
+Success response:
+
+- Status: `200 OK`
+- Body:
+
+```json
+{
+  "group_id": 3,
+  "group_name": "devs",
+  "owner_id": 1,
+  "wrapped_group_key": "a1b2c3d4"
+}
+```
+
+Common error cases:
+
+- `400 Bad Request` for an invalid `group_name` query
+- `401 Unauthorized` for missing or bad token
+- `403 Forbidden` if the caller is not a member of the group
+- `404 Not Found` if the group does not exist
 
 Example:
 
@@ -521,7 +566,9 @@ Success response:
   "groups": [
     {
       "group_id": 3,
-      "group_name": "devs"
+      "group_name": "devs",
+      "owner_id": 1,
+      "is_owner": false
     }
   ]
 }
@@ -545,11 +592,12 @@ These routes are still placeholders or not wired up yet:
 
 If you want a thin client wrapper layer, these are the core actions it should expose:
 
-- `create_file(filepath)`
+- `create_file(filepath, wrapped_fek_owner, group_name=None, wrapped_fek_group=None, wrapped_fek_other=None)`
 - `write_file(filepath, bytes)`
 - `read_file(filepath)`
 - `delete_file(filepath)`
-- `create_group(group_name)`
+- `create_group(group_name, wrapped_group_key)`
+- `get_group_key(group_name)`
 - `add_group_member(group_name, username, wrapped_group_key)`
 - `remove_group_member(group_name, username)`
 - `list_user_groups(username=None)`

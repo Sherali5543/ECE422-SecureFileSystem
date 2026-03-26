@@ -27,6 +27,7 @@ typedef struct {
 typedef struct {
   int id;
   char name[DB_GROUP_NAME_MAX];
+  int owner_id;
 } db_group_t;
 
 typedef struct {
@@ -81,7 +82,7 @@ int db_find_group_by_name(server_context_t* ctx, const char* group_name,
 int db_find_group_by_id(server_context_t* ctx, int group_id,
                         db_group_t* out_group);
 int db_create_group(server_context_t* ctx, const char* group_name,
-                    int* out_group_id);
+                    int owner_id, int* out_group_id);
 
 int db_add_user_to_group(server_context_t* ctx, int user_id, int group_id,
                          const void* wrapped_group_key,
@@ -92,6 +93,9 @@ int db_is_user_in_group(server_context_t* ctx, int user_id, int group_id,
 int db_get_user_groups(server_context_t* ctx, int user_id,
                        db_group_membership_t* out_memberships,
                        size_t max_memberships, size_t* out_count);
+int db_find_user_group_membership(server_context_t* ctx, int user_id,
+                                  int group_id,
+                                  db_group_membership_t* out_membership);
 
 int db_create_file_metadata(server_context_t* ctx,
                             const db_file_metadata_t* metadata,
