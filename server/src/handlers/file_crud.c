@@ -23,6 +23,10 @@ typedef struct {
   const char* filepath;
 } create_file_request_t;
 
+typedef struct {
+  char filepath[DB_FILE_PATH_MAX];
+} filepath_query_t;
+
 static void send_bad_request(http_message_t* response, SSL* ssl) {
   response->status_code = 400;
   strncpy(response->reason, "Bad request", sizeof(response->reason) - 1);
@@ -57,15 +61,10 @@ static void send_json_error(SSL* ssl, http_message_t* response, int status,
   write_json_body(ssl, json_body);
 }
 
-static int read_exact_body(SSL* ssl, char* buf, size_t len) {
-  size_t total = 0;
-
-  while (total < len) {
-    ssize_t n = tls_read(ssl, buf + total, len - total);
-    if (n <= 0) {
-      return -1;
-    }
-    total += (size_t)n;
+static int read_exact_body(http_message_t* msg, SSL* ssl, char* buf,
+                           size_t len) {
+  if (read_message_body(ssl, msg, buf, len) != (ssize_t)len) {
+    return -1;
   }
 
   buf[len] = '\0';
@@ -243,6 +242,33 @@ static int is_valid_logical_path(const char* path) {
   return path[strlen(path) - 1] != '/';
 }
 
+static int parse_filepath_query(const http_message_t* msg, filepath_query_t* out) {
+  static const char prefix[] = "filepath=";
+  const char* value = NULL;
+  size_t len = 0;
+
+  if (!msg || !out) {
+    return -1;
+  }
+  if (strncmp(msg->query, prefix, sizeof(prefix) - 1) != 0) {
+    return -1;
+  }
+
+  value = msg->query + sizeof(prefix) - 1;
+  if (*value == '\0' || strchr(value, '&') != NULL) {
+    return -1;
+  }
+
+  len = strlen(value);
+  if (len >= sizeof(out->filepath)) {
+    return -1;
+  }
+
+  memcpy(out->filepath, value, len);
+  out->filepath[len] = '\0';
+  return is_valid_logical_path(out->filepath) ? 0 : -1;
+}
+
 static int can_create_in_directory(server_context_t* ctx, int user_id,
                                    const db_file_metadata_t* parent_meta) {
   int is_member = 0;
@@ -265,6 +291,30 @@ static int can_create_in_directory(server_context_t* ctx, int user_id,
   }
 
   return (parent_meta->mode_bits & 0002) != 0;
+}
+
+static int can_access_file(server_context_t* ctx, int user_id,
+                           const db_file_metadata_t* meta, int owner_mask,
+                           int group_mask, int other_mask) {
+  int is_member = 0;
+
+  if (!ctx || !meta) {
+    return 0;
+  }
+  if (strcmp(meta->object_type, "file") != 0) {
+    return 0;
+  }
+  if (meta->owner_id == user_id && (meta->mode_bits & owner_mask)) {
+    return 1;
+  }
+
+  if (meta->has_group_id &&
+      db_is_user_in_group(ctx, user_id, meta->group_id, &is_member) == 0 &&
+      is_member && (meta->mode_bits & group_mask)) {
+    return 1;
+  }
+
+  return (meta->mode_bits & other_mask) != 0;
 }
 
 static void cleanup_create_file_request(create_file_request_t* req) {
@@ -292,14 +342,14 @@ static int parse_create_file_request(http_message_t* msg, SSL* ssl,
   *out_body_bytes_read = 0;
 
   if (msg->content_type != JSON) {
-    drain_body(ssl, msg->content_length);
+    drain_message_body(ssl, msg, msg->content_length);
     send_json_error(ssl, response, 415, "Unsupported Media Type",
                     "{\"error\":\"expected application/json\"}");
     return -1;
   }
 
   if (msg->content_length == 0 || msg->content_length > HTTP_MAX_BODY_LEN) {
-    drain_body(ssl, msg->content_length);
+    drain_message_body(ssl, msg, msg->content_length);
     send_json_error(ssl, response, 400, "Bad Request",
                     "{\"error\":\"invalid content length\"}");
     return -1;
@@ -307,13 +357,13 @@ static int parse_create_file_request(http_message_t* msg, SSL* ssl,
 
   out_req->body = calloc(msg->content_length + 1, 1);
   if (!out_req->body) {
-    drain_body(ssl, msg->content_length);
+    drain_message_body(ssl, msg, msg->content_length);
     send_json_error(ssl, response, 500, "Internal Server Error",
                     "{\"error\":\"allocation failure\"}");
     return -1;
   }
 
-  if (read_exact_body(ssl, out_req->body, msg->content_length) != 0) {
+  if (read_exact_body(msg, ssl, out_req->body, msg->content_length) != 0) {
     send_bad_request(response, ssl);
     return -1;
   }
@@ -418,7 +468,7 @@ void create_file(http_message_t* msg, SSL* ssl, http_message_t* response,
   }
 
   if (msg->auth_token[0] == '\0') {
-    drain_body(ssl, msg->content_length);
+    drain_message_body(ssl, msg, msg->content_length);
     send_json_error(ssl, response, 401, "Unauthorized",
                     "{\"error\":\"missing bearer token\"}");
     return;
@@ -502,7 +552,214 @@ void create_file(http_message_t* msg, SSL* ssl, http_message_t* response,
 
 cleanup:
   if (body_bytes_read < msg->content_length) {
-    drain_body(ssl, msg->content_length - body_bytes_read);
+    drain_message_body(ssl, msg, msg->content_length - body_bytes_read);
   }
   cleanup_create_file_request(&req);
+}
+
+void write_file(http_message_t* msg, SSL* ssl, http_message_t* response,
+                server_context_t* ctx) {
+  filepath_query_t query = {0};
+  server_session_t session;
+  db_file_metadata_t meta;
+  char storage_path[STORAGE_PATH_MAX];
+  char* body = NULL;
+  int fd = -1;
+  int rc = 0;
+
+  if (!msg || !ssl || !response || !ctx) {
+    return;
+  }
+
+  if (msg->auth_token[0] == '\0') {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 401, "Unauthorized",
+                    "{\"error\":\"missing bearer token\"}");
+    return;
+  }
+  if (parse_filepath_query(msg, &query) != 0) {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"missing or invalid filepath query\"}");
+    return;
+  }
+  if (msg->content_length > HTTP_MAX_BODY_LEN) {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"content too large\"}");
+    return;
+  }
+  if (get_user_from_token(ctx, msg->auth_token, &session) != 0) {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 401, "Unauthorized",
+                    "{\"error\":\"invalid or expired token\"}");
+    return;
+  }
+
+  rc = db_find_file_metadata_by_path(ctx, query.filepath, strlen(query.filepath),
+                                     &meta);
+  if (rc == -1) {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to load file metadata\"}");
+    return;
+  }
+  if (rc == 0) {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 404, "Not Found",
+                    "{\"error\":\"file not found\"}");
+    return;
+  }
+  if (!can_access_file(ctx, session.user_id, &meta, 0200, 0020, 0002)) {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 403, "Forbidden",
+                    "{\"error\":\"insufficient permissions\"}");
+    return;
+  }
+  if (build_storage_path(ctx, query.filepath, storage_path,
+                         sizeof(storage_path)) != 0) {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to build storage path\"}");
+    return;
+  }
+
+  body = calloc(msg->content_length + 1, 1);
+  if (body == NULL) {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"allocation failure\"}");
+    return;
+  }
+  if (msg->content_length > 0 &&
+      read_exact_body(msg, ssl, body, msg->content_length) != 0) {
+    send_bad_request(response, ssl);
+    goto cleanup;
+  }
+
+  fd = open(storage_path, O_WRONLY | O_TRUNC | O_CREAT, 0644);
+  if (fd < 0) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to open backing file\"}");
+    goto cleanup;
+  }
+  if (msg->content_length > 0 &&
+      write(fd, body, msg->content_length) != (ssize_t)msg->content_length) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to write backing file\"}");
+    goto cleanup;
+  }
+  close(fd);
+  fd = -1;
+
+  meta.updated_at = (long long)time(NULL);
+  rc = db_update_file_metadata(ctx, query.filepath, strlen(query.filepath),
+                               &meta);
+  if (rc < 0) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to update metadata timestamp\"}");
+    goto cleanup;
+  }
+
+  send_json_error(ssl, response, 200, "OK",
+                  "{\"message\":\"file written\"}");
+
+cleanup:
+  if (fd >= 0) {
+    close(fd);
+  }
+  free(body);
+}
+
+void read_file(http_message_t* msg, SSL* ssl, http_message_t* response,
+               server_context_t* ctx) {
+  filepath_query_t query = {0};
+  server_session_t session;
+  db_file_metadata_t meta;
+  char storage_path[STORAGE_PATH_MAX];
+  char buf[1024];
+  struct stat st;
+  int fd = -1;
+  int rc = 0;
+
+  if (!msg || !ssl || !response || !ctx) {
+    return;
+  }
+
+  if (msg->auth_token[0] == '\0') {
+    send_json_error(ssl, response, 401, "Unauthorized",
+                    "{\"error\":\"missing bearer token\"}");
+    return;
+  }
+  if (parse_filepath_query(msg, &query) != 0) {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"missing or invalid filepath query\"}");
+    return;
+  }
+  if (get_user_from_token(ctx, msg->auth_token, &session) != 0) {
+    send_json_error(ssl, response, 401, "Unauthorized",
+                    "{\"error\":\"invalid or expired token\"}");
+    return;
+  }
+
+  rc = db_find_file_metadata_by_path(ctx, query.filepath, strlen(query.filepath),
+                                     &meta);
+  if (rc == -1) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to load file metadata\"}");
+    return;
+  }
+  if (rc == 0) {
+    send_json_error(ssl, response, 404, "Not Found",
+                    "{\"error\":\"file not found\"}");
+    return;
+  }
+  if (!can_access_file(ctx, session.user_id, &meta, 0400, 0040, 0004)) {
+    send_json_error(ssl, response, 403, "Forbidden",
+                    "{\"error\":\"insufficient permissions\"}");
+    return;
+  }
+  if (build_storage_path(ctx, query.filepath, storage_path,
+                         sizeof(storage_path)) != 0) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to build storage path\"}");
+    return;
+  }
+
+  fd = open(storage_path, O_RDONLY);
+  if (fd < 0) {
+    send_json_error(ssl, response, 404, "Not Found",
+                    "{\"error\":\"backing file not found\"}");
+    return;
+  }
+  if (fstat(fd, &st) != 0 || st.st_size < 0) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to stat backing file\"}");
+    close(fd);
+    return;
+  }
+
+  response->status_code = 200;
+  strncpy(response->reason, "OK", sizeof(response->reason) - 1);
+  response->reason[sizeof(response->reason) - 1] = '\0';
+  response->content_type = STREAM;
+  response->content_length = (size_t)st.st_size;
+  strncpy(response->connection, "close", sizeof(response->connection) - 1);
+  response->connection[sizeof(response->connection) - 1] = '\0';
+  send_response(ssl, response);
+
+  while (1) {
+    ssize_t n = read(fd, buf, sizeof(buf));
+    if (n < 0) {
+      break;
+    }
+    if (n == 0) {
+      break;
+    }
+    if (tls_write(ssl, buf, (size_t)n) != n) {
+      break;
+    }
+  }
+
+  close(fd);
 }

@@ -47,11 +47,14 @@ typedef struct {
 
   http_content_type_t content_type;
   size_t content_length;
+  unsigned char body_prefix[HTTP_MAX_BODY_LEN];
+  size_t body_prefix_len;
   char connection[HTTP_MAX_HEADER_VALUE];
   char auth_token[HTTP_MAX_TOKEN_LEN];
   char x_signature[HTTP_MAX_HEADER_VALUE]; 
   time_t x_timestamp;  
   bool has_x_timestamp;
+  bool message_sent;
 } http_message_t;
 
 typedef enum {
@@ -224,4 +227,6 @@ void send_response(SSL* ssl, http_message_t* response);
 void send_request(SSL* ssl, http_message_t* response);
 void test_read_message_contents(http_message_t *msg);
 int drain_body(SSL* ssl, size_t len);
+int drain_message_body(SSL* ssl, http_message_t* msg, size_t len);
+ssize_t read_message_body(SSL* ssl, http_message_t* msg, void* buf, size_t len);
 #endif

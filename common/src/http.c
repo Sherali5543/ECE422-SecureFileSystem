@@ -90,12 +90,8 @@ static int append_buf(char* dst, size_t* dst_len, size_t cap, const char* src,
 
 static int on_protocol(llhttp_t* parser, const char* at, size_t length) {
   (void)parser;
+  (void)at;
   (void)length;
-  if (strncasecmp("HTTP", at, 4) != 0) {
-    fprintf(stderr, "On protocol: Incorrect protocol\n");
-    return -1;
-  }
-
   return 0;
 }
 
@@ -108,12 +104,8 @@ static int on_url(llhttp_t* parser, const char* at, size_t length) {
 
 static int on_version(llhttp_t* parser, const char* at, size_t length) {
   (void)parser;
+  (void)at;
   (void)length;
-  if (strncasecmp("1.1", at, 3) != 0) {
-    fprintf(stderr, "On version: Incorrect version\n");
-    return -1;
-  }
-
   return 0;
 }
 
@@ -217,11 +209,33 @@ http_message_t* init_message_struct(void) {
 
 http_read_status_t http_parse_message(char* buf, size_t len, llhttp_t* parser,
                                       http_parse_ctx_t* context) {
+  const char* error_pos = NULL;
+  size_t consumed = len;
+
   parser->data = context;
 
   enum llhttp_errno err = llhttp_execute(parser, buf, len);
 
   if (err == HPE_PAUSED) {
+    error_pos = llhttp_get_error_pos(parser);
+    if (error_pos != NULL && error_pos >= buf && error_pos < buf + len) {
+      consumed = (size_t)(error_pos - buf) + 1;
+    }
+
+    if (context != NULL && context->msg != NULL) {
+      context->msg->body_prefix_len = 0;
+      if (consumed < len) {
+        size_t remaining = len - consumed;
+        if (remaining > sizeof(context->msg->body_prefix)) {
+          fprintf(stderr, "Parse error: body prefix too large\n");
+          return HTTP_READ_ERROR;
+        }
+
+        memcpy(context->msg->body_prefix, buf + consumed, remaining);
+        context->msg->body_prefix_len = remaining;
+      }
+    }
+
     return HTTP_READ_HEADERS_COMPLETE;
   }
 

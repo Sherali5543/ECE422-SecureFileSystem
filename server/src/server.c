@@ -25,7 +25,9 @@ void handle_client(SSL* ssl, server_context_t *ctx) {
       return;  // Shouldn't actually happen
     }
     printf("---------Sending response\n");
-    send_response(ssl, response);
+    if (!response->message_sent) {
+      send_response(ssl, response);
+    }
     destroy_message(response);
   }
 }

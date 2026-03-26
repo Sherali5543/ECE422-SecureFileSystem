@@ -17,7 +17,8 @@ http_message_t* handle_request(http_message_t* msg, SSL* ssl, server_context_t *
         return res;
       } else if (strncmp(msg->path, "/files/contents", HTTP_MAX_PATH_LEN) ==
                  0) {
-        // Handle read files
+        read_file(msg, ssl, res, ctx);
+        return res;
       }
       break;
     case POST:
@@ -46,7 +47,8 @@ http_message_t* handle_request(http_message_t* msg, SSL* ssl, server_context_t *
       break;
     case PUT:
       if (strncmp(msg->path, "/files/content", HTTP_MAX_PATH_LEN) == 0) {
-        // Handle write file
+        write_file(msg, ssl, res, ctx);
+        return res;
       }
       break;
     case PATCH:

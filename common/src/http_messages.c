@@ -3,6 +3,28 @@
 
 #include "http.h"
 
+static size_t consume_prefetched_body(http_message_t* msg, void* buf,
+                                      size_t len) {
+  size_t take = 0;
+
+  if (msg == NULL || buf == NULL || len == 0 || msg->body_prefix_len == 0) {
+    return 0;
+  }
+
+  take = len;
+  if (take > msg->body_prefix_len) {
+    take = msg->body_prefix_len;
+  }
+
+  memcpy(buf, msg->body_prefix, take);
+  if (take < msg->body_prefix_len) {
+    memmove(msg->body_prefix, msg->body_prefix + take,
+            msg->body_prefix_len - take);
+  }
+  msg->body_prefix_len -= take;
+  return take;
+}
+
 int drain_body(SSL* ssl, size_t len) {
   char buf[1024];
   size_t total = 0;
@@ -18,6 +40,49 @@ int drain_body(SSL* ssl, size_t len) {
   }
 
   return 0;
+}
+
+int drain_message_body(SSL* ssl, http_message_t* msg, size_t len) {
+  size_t consumed = 0;
+
+  if (msg != NULL && msg->body_prefix_len > 0) {
+    consumed = len;
+    if (consumed > msg->body_prefix_len) {
+      consumed = msg->body_prefix_len;
+    }
+
+    if (consumed < msg->body_prefix_len) {
+      memmove(msg->body_prefix, msg->body_prefix + consumed,
+              msg->body_prefix_len - consumed);
+    }
+    msg->body_prefix_len -= consumed;
+    len -= consumed;
+  }
+
+  if (len == 0) {
+    return 0;
+  }
+
+  return drain_body(ssl, len);
+}
+
+ssize_t read_message_body(SSL* ssl, http_message_t* msg, void* buf, size_t len) {
+  size_t total = 0;
+
+  if (ssl == NULL || msg == NULL || buf == NULL) {
+    return -1;
+  }
+
+  total += consume_prefetched_body(msg, buf, len);
+  while (total < len) {
+    ssize_t n = tls_read(ssl, (unsigned char*)buf + total, len - total);
+    if (n <= 0) {
+      return -1;
+    }
+    total += (size_t)n;
+  }
+
+  return (ssize_t)total;
 }
 
 http_message_t* init_request(void) {
@@ -71,7 +136,7 @@ http_message_t* read_request(SSL* ssl) {
   }
   http_parser_init(&parser, &settings, REQUEST);
 
-  char buf[HTTP_MAX_PREAMBLE_LEN];
+  char buf[1];
   memset(buf, 0, sizeof(buf));
   ssize_t nread = 0;
   http_read_status_t read_status = HTTP_READ_NEED_MORE;
@@ -105,7 +170,7 @@ http_message_t* read_response(SSL* ssl) {
   }
   http_parser_init(&parser, &settings, RESPONSE);
 
-  char buf[HTTP_MAX_PREAMBLE_LEN];
+  char buf[1];
   memset(buf, 0, sizeof(buf));
   ssize_t nread = 0;
   http_read_status_t read_status = HTTP_READ_NEED_MORE;
@@ -141,6 +206,7 @@ void send_response(SSL* ssl, http_message_t* response) {
   if (header_len < 0) return;
   ssize_t nwritten = tls_write(ssl, buf, (size_t)header_len);
   if (nwritten <= 0) return;
+  response->message_sent = true;
   fprintf(stderr, "Client connection closed %zu bytes sent\n", nwritten);
 }
 
@@ -154,5 +220,6 @@ void send_request(SSL* ssl, http_message_t* response) {
   if (header_len < 0) return;
   ssize_t nwritten = tls_write(ssl, buf, (size_t)header_len);
   if (nwritten <= 0) return;
+  response->message_sent = true;
   fprintf(stderr, "Client connection closed %zu bytes sent\n", nwritten);
 }
