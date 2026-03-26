@@ -1,6 +1,6 @@
 *.cache/*
 build/*
-storage/*
+**/storage/**
 !*.keep
 
 # Secrets

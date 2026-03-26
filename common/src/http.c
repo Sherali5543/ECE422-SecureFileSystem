@@ -29,9 +29,42 @@ static int commit_header(llhttp_t* parser) {
             sizeof(data->msg->connection) - 1);
     data->msg->connection[sizeof(data->msg->connection) - 1] = '\0';
   } else if (strcasecmp(data->current_header_name, "Authorization") == 0) {
-    strncpy(data->msg->auth_token, data->current_header_value,
-            sizeof(data->msg->auth_token) - 1);
-    data->msg->auth_token[sizeof(data->msg->auth_token) - 1] = '\0';
+    const char* prefix = "Bearer ";
+    size_t prefix_len = strlen(prefix);
+
+    if (strncasecmp(data->current_header_value, prefix, prefix_len) == 0) {
+      const char* token = data->current_header_value + prefix_len;
+
+      strncpy(data->msg->auth_token, token, sizeof(data->msg->auth_token) - 1);
+      data->msg->auth_token[sizeof(data->msg->auth_token) - 1] = '\0';
+    } else {
+      // Invalid format (missing "Bearer ")
+      data->msg->auth_token[0] = '\0';
+      // optionally mark error here
+      return -1;
+    }
+  } else if (strncasecmp(data->current_header_name, "X-Signature",
+                         HTTP_MAX_HEADER_NAME) == 0) {
+    strncpy(data->msg->x_signature, data->current_header_value,
+            sizeof(data->msg->x_signature) - 1);
+    data->msg->x_signature[sizeof(data->msg->x_signature) - 1] = '\0';
+  } else if (strncasecmp(data->current_header_name, "X-Timestamp",
+                         HTTP_MAX_HEADER_NAME) == 0) {
+    // Convert string → integer
+    char* endptr = NULL;
+    long long ts = strtoll(data->current_header_value, &endptr, 10);
+
+    // Validate conversion
+    if (endptr == data->current_header_value || *endptr != '\0') {
+      // invalid number (e.g., "abc123")
+      data->msg->x_timestamp = 0;
+      data->msg->has_x_timestamp = false;
+      // optionally mark error
+      return -1;
+    } else {
+      data->msg->x_timestamp = (time_t)ts;
+      data->msg->has_x_timestamp = true;
+    }
   }
 
   data->current_header_name[0] = '\0';
@@ -57,12 +90,8 @@ static int append_buf(char* dst, size_t* dst_len, size_t cap, const char* src,
 
 static int on_protocol(llhttp_t* parser, const char* at, size_t length) {
   (void)parser;
+  (void)at;
   (void)length;
-  if (strncasecmp("HTTP", at, 4) != 0) {
-    fprintf(stderr, "On protocol: Incorrect protocol\n");
-    return -1;
-  }
-
   return 0;
 }
 
@@ -75,12 +104,8 @@ static int on_url(llhttp_t* parser, const char* at, size_t length) {
 
 static int on_version(llhttp_t* parser, const char* at, size_t length) {
   (void)parser;
+  (void)at;
   (void)length;
-  if (strncasecmp("1.1", at, 3) != 0) {
-    fprintf(stderr, "On version: Incorrect version\n");
-    return -1;
-  }
-
   return 0;
 }
 
@@ -184,11 +209,33 @@ http_message_t* init_message_struct(void) {
 
 http_read_status_t http_parse_message(char* buf, size_t len, llhttp_t* parser,
                                       http_parse_ctx_t* context) {
+  const char* error_pos = NULL;
+  size_t consumed = len;
+
   parser->data = context;
 
   enum llhttp_errno err = llhttp_execute(parser, buf, len);
 
   if (err == HPE_PAUSED) {
+    error_pos = llhttp_get_error_pos(parser);
+    if (error_pos != NULL && error_pos >= buf && error_pos < buf + len) {
+      consumed = (size_t)(error_pos - buf) + 1;
+    }
+
+    if (context != NULL && context->msg != NULL) {
+      context->msg->body_prefix_len = 0;
+      if (consumed < len) {
+        size_t remaining = len - consumed;
+        if (remaining > sizeof(context->msg->body_prefix)) {
+          fprintf(stderr, "Parse error: body prefix too large\n");
+          return HTTP_READ_ERROR;
+        }
+
+        memcpy(context->msg->body_prefix, buf + consumed, remaining);
+        context->msg->body_prefix_len = remaining;
+      }
+    }
+
     return HTTP_READ_HEADERS_COMPLETE;
   }
 
@@ -214,9 +261,19 @@ ssize_t http_build_header(const http_message_t* msg,
                           char out[HTTP_MAX_PREAMBLE_LEN],
                           http_message_type_t type) {
   char start_line[HTTP_MAX_START_LEN];
+  char headers[HTTP_MAX_HEADER_LEN * 8];
+  int offset = 0;
+  int n = 0;
+
+  if (!msg || !out) return -1;
+
+  memset(start_line, 0, sizeof(start_line));
+  memset(headers, 0, sizeof(headers));
+  memset(out, 0, HTTP_MAX_PREAMBLE_LEN);
 
   if (type == REQUEST) {
-    char* method;
+    // Set path and query
+    const char* method;
     switch (msg->method) {
       case GET:
         method = "GET";
@@ -238,60 +295,91 @@ ssize_t http_build_header(const http_message_t* msg,
         return -1;
     }
 
-    if (strnlen(msg->query, HTTP_MAX_QUERY_LEN) > 0) {
+    if (strnlen(msg->query, HTTP_MAX_QUERY_LEN) > 0) {  // There is a query
       if (checklen(msg->path, HTTP_MAX_PATH_LEN) ||
-          checklen(msg->query, HTTP_MAX_QUERY_LEN))
+          checklen(msg->query, HTTP_MAX_QUERY_LEN)) {
         return -1;
-      snprintf(start_line, HTTP_MAX_START_LEN, "%s %s?%s HTTP/1.1\r\n", method,
-               msg->path, msg->query);
+      }
+
+      n = snprintf(start_line, sizeof(start_line), "%s %s?%s HTTP/1.1\r\n",
+                   method, msg->path, msg->query);
     } else {
       if (checklen(msg->path, HTTP_MAX_PATH_LEN)) return -1;
-      snprintf(start_line, HTTP_MAX_START_LEN, "%s %s HTTP/1.1\r\n", method,
-               msg->path);
+
+      n = snprintf(start_line, sizeof(start_line), "%s %s HTTP/1.1\r\n", method,
+                   msg->path);
     }
-  } else {
-    if (checklen(msg->reason, HTTP_MAX_QUERY_LEN) || msg->status_code > 999 ||
-        msg->status_code < 0)
+
+    if (n < 0 || (size_t)n >= sizeof(start_line)) return -1;
+  } else {  // Response format
+    if (checklen(msg->reason, HTTP_MAX_QUERY_LEN) || msg->status_code < 0 ||
+        msg->status_code > 999) {
       return -1;
-    snprintf(start_line, HTTP_MAX_START_LEN, "HTTP/1.1 %d %s\r\n",
-             msg->status_code, msg->reason);
+    }
+
+    n = snprintf(start_line, sizeof(start_line), "HTTP/1.1 %d %s\r\n",
+                 msg->status_code, msg->reason);
+    if (n < 0 || (size_t)n >= sizeof(start_line)) return -1;
   }
 
-  // I'm going to assume all headers exist!
-  char headers[HTTP_MAX_HEADER_LEN * 5];
-  if (checklen(
-          msg->auth_token,
-          HTTP_MAX_HEADER_VALUE) ||  // Don't check content-length cuz ul >=0
-      checklen(msg->connection, HTTP_MAX_HEADER_VALUE))
-    return -1;
+  if (checklen(msg->connection, HTTP_MAX_HEADER_VALUE)) return -1;
 
-  int offset = snprintf(headers, sizeof(headers),
-                        "Authorization: %s\r\n"
-                        "Content-length: %lu\r\n"
-                        "Connection: %s\r\n",
-                        msg->auth_token, msg->content_length, msg->connection);
-  if (offset < 0 || (size_t)offset >= sizeof(headers)) return -1;
+  if (type == REQUEST) {
+    // Header add
+    if (checklen(msg->auth_token, HTTP_MAX_TOKEN_LEN)) return -1;
+
+    n = snprintf(headers + offset, sizeof(headers) - (size_t)offset,
+                 "Authorization: Bearer %s\r\n", msg->auth_token);
+    if (n < 0 || (size_t)n >= sizeof(headers) - (size_t)offset) return -1;
+    offset += n;
+
+    if (msg->x_signature[0] != '\0') {
+      if (checklen(msg->x_signature, HTTP_MAX_HEADER_VALUE)) return -1;
+
+      n = snprintf(headers + offset, sizeof(headers) - (size_t)offset,
+                   "X-Signature: %s\r\n", msg->x_signature);
+      if (n < 0 || (size_t)n >= sizeof(headers) - (size_t)offset) return -1;
+      offset += n;
+    }
+
+    if (msg->has_x_timestamp) {
+      n = snprintf(headers + offset, sizeof(headers) - (size_t)offset,
+                   "X-Timestamp: %lld\r\n", (long long)msg->x_timestamp);
+      if (n < 0 || (size_t)n >= sizeof(headers) - (size_t)offset) return -1;
+      offset += n;
+    }
+  }
+
+  // Common headers
+  n = snprintf(headers + offset, sizeof(headers) - (size_t)offset,
+               "Content-Length: %zu\r\n"
+               "Connection: %s\r\n",
+               msg->content_length, msg->connection);
+  if (n < 0 || (size_t)n >= sizeof(headers) - (size_t)offset) return -1;
+  offset += n;
 
   switch (msg->content_type) {
     case JSON:
-      snprintf(headers + offset, sizeof(headers) - (size_t)offset,
-               "Content-type: application/json\r\n");
+      n = snprintf(headers + offset, sizeof(headers) - (size_t)offset,
+                   "Content-Type: application/json\r\n");
       break;
     case STREAM:
-      snprintf(headers + offset, sizeof(headers) - (size_t)offset,
-               "Content-type: application/octet-stream\r\n");
+      n = snprintf(headers + offset, sizeof(headers) - (size_t)offset,
+                   "Content-Type: application/octet-stream\r\n");
       break;
     case NONE:
     default:
+      n = 0;
       break;
   }
 
-  snprintf(out, HTTP_MAX_PREAMBLE_LEN,
-           "%s"
-           "%s"
-           "\r\n",
-           start_line, headers);
-  return (ssize_t)strlen(out);
+  if (n < 0 || (size_t)n >= sizeof(headers) - (size_t)offset) return -1;
+  offset += n;
+
+  n = snprintf(out, HTTP_MAX_PREAMBLE_LEN, "%s%s\r\n", start_line, headers);
+  if (n < 0 || (size_t)n >= HTTP_MAX_PREAMBLE_LEN) return -1;
+
+  return (ssize_t)n;
 }
 
 int http_init_context(http_parse_ctx_t* ctx) {

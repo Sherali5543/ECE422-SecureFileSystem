@@ -17,13 +17,14 @@ target_include_directories(common PUBLIC
     ${SODIUM_INCLUDE_DIRS}
     ${OPENSSL_INCLUDE_DIRS}
     ${LLHTTP_INCLUDE_DIRS}
-    ${CJSON_INCULDE_DIRS}
+    ${CJSON_INCLUDE_DIRS}
 )
 
 target_link_directories(common PUBLIC
     ${SODIUM_LIBRARY_DIRS}
     ${OPENSSL_LIBRARY_DIRS}
     ${LLHTTP_LIBRARY_DIRS}
+    ${CJSON_LIBRARY_DIRS}
 )
 
 target_link_libraries(common PUBLIC
@@ -36,4 +37,5 @@ target_link_libraries(common PUBLIC
 target_compile_options(common PUBLIC 
     ${SODIUM_CFLAGS_OTHER}
     ${OPENSSL_CFLAGS_OTHER}
+    ${CJSON_CFLAGS_OTHER}
 )
