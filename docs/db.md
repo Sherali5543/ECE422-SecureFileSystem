@@ -82,7 +82,7 @@ Represents a row from the `users` table, including `id`, `username`, `public_enc
 
 ### `db_group_t`
 
-Represents a row from the `groups` table with a group `id` and `name`.
+Represents a row from the `groups` table with a group `id`, `name`, and `owner_id`.
 
 ### `db_group_membership_t`
 
@@ -141,9 +141,9 @@ Looks up a group by name and fills `out_group` if a row exists.
 
 Looks up a group by numeric ID and fills `out_group` if a row exists.
 
-#### `int db_create_group(server_context_t* ctx, const char* group_name, int* out_group_id);`
+#### `int db_create_group(server_context_t* ctx, const char* group_name, int owner_id, int* out_group_id);`
 
-Inserts a new group row and optionally returns the inserted group ID.
+Inserts a new group row with an owner user ID and optionally returns the inserted group ID.
 
 ### Group membership
 
@@ -158,6 +158,10 @@ Checks whether a user is already a member of a given group.
 #### `int db_get_user_groups(server_context_t* ctx, int user_id, db_group_membership_t* out_memberships, size_t max_memberships, size_t* out_count);`
 
 Returns the groups a user belongs to and optionally copies each membership into the output buffer.
+
+#### `int db_find_user_group_membership(server_context_t* ctx, int user_id, int group_id, db_group_membership_t* out_membership);`
+
+Looks up one specific group membership and returns the wrapped group key stored for that user and group.
 
 ### File metadata
 

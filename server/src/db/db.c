@@ -197,6 +197,7 @@ static int load_group_from_stmt(sqlite3_stmt* stmt, db_group_t* out_group) {
   out_group->id = sqlite3_column_int(stmt, 0);
   db_group_name = sqlite3_column_text(stmt, 1);
   group_name_len = sqlite3_column_bytes(stmt, 1);
+  out_group->owner_id = sqlite3_column_int(stmt, 2);
 
   return copy_text_value(db_group_name, group_name_len, out_group->name,
                          sizeof(out_group->name), "load_group_from_stmt");
@@ -217,11 +218,12 @@ static int load_group_membership_from_stmt(sqlite3_stmt* stmt, int user_id,
   out_item->user_id = user_id;
   out_item->group_id = sqlite3_column_int(stmt, 0);
   out_item->group.id = out_item->group_id;
+  out_item->group.owner_id = sqlite3_column_int(stmt, 2);
 
   group_name = sqlite3_column_text(stmt, 1);
   group_name_len = sqlite3_column_bytes(stmt, 1);
-  wrapped_group_key = sqlite3_column_blob(stmt, 2);
-  wrapped_group_key_len = sqlite3_column_bytes(stmt, 2);
+  wrapped_group_key = sqlite3_column_blob(stmt, 3);
+  wrapped_group_key_len = sqlite3_column_bytes(stmt, 3);
 
   if (copy_text_value(group_name, group_name_len, out_item->group.name,
                       sizeof(out_item->group.name),
@@ -522,7 +524,8 @@ int db_create_user(server_context_t* ctx, const char* username,
 
 int db_find_group_by_name(server_context_t* ctx, const char* group_name,
                           db_group_t* out_group) {
-  static const char sql[] = "SELECT id, name FROM groups WHERE name = ?1;";
+  static const char sql[] =
+      "SELECT id, name, owner_id FROM groups WHERE name = ?1;";
   sqlite3_stmt* stmt = NULL;
   sqlite3* db = db_handle(ctx);
   int step_rc = SQLITE_ERROR;
@@ -553,7 +556,8 @@ int db_find_group_by_name(server_context_t* ctx, const char* group_name,
 
 int db_find_group_by_id(server_context_t* ctx, int group_id,
                         db_group_t* out_group) {
-  static const char sql[] = "SELECT id, name FROM groups WHERE id = ?1;";
+  static const char sql[] =
+      "SELECT id, name, owner_id FROM groups WHERE id = ?1;";
   sqlite3_stmt* stmt = NULL;
   sqlite3* db = db_handle(ctx);
   int step_rc = SQLITE_ERROR;
@@ -582,8 +586,9 @@ int db_find_group_by_id(server_context_t* ctx, int group_id,
 }
 
 int db_create_group(server_context_t* ctx, const char* group_name,
-                    int* out_group_id) {
-  static const char sql[] = "INSERT INTO groups (name) VALUES (?1);";
+                    int owner_id, int* out_group_id) {
+  static const char sql[] =
+      "INSERT INTO groups (name, owner_id) VALUES (?1, ?2);";
   sqlite3_stmt* stmt = NULL;
   sqlite3* db = db_handle(ctx);
 
@@ -592,7 +597,8 @@ int db_create_group(server_context_t* ctx, const char* group_name,
   }
 
   if (prepare_statement(db, &stmt, sql) != 0 ||
-      bind_text_value(db, stmt, 1, group_name, "db_create_group") != 0) {
+      bind_text_value(db, stmt, 1, group_name, "db_create_group") != 0 ||
+      bind_int_value(db, stmt, 2, owner_id, "db_create_group") != 0) {
     return finish_statement(stmt, -1);
   }
 
@@ -703,7 +709,7 @@ int db_get_user_groups(server_context_t* ctx, int user_id,
                        db_group_membership_t* out_memberships,
                        size_t max_memberships, size_t* out_count) {
   static const char sql[] =
-      "SELECT g.id, g.name, gm.wrapped_group_key "
+      "SELECT g.id, g.name, g.owner_id, gm.wrapped_group_key "
       "FROM group_members gm "
       "JOIN groups g ON g.id = gm.group_id "
       "WHERE gm.user_id = ?1 "
@@ -747,6 +753,45 @@ int db_get_user_groups(server_context_t* ctx, int user_id,
   }
 
   return finish_statement(stmt, 0);
+}
+
+int db_find_user_group_membership(server_context_t* ctx, int user_id,
+                                  int group_id,
+                                  db_group_membership_t* out_membership) {
+  static const char sql[] =
+      "SELECT g.id, g.name, g.owner_id, gm.wrapped_group_key "
+      "FROM group_members gm "
+      "JOIN groups g ON g.id = gm.group_id "
+      "WHERE gm.user_id = ?1 AND gm.group_id = ?2;";
+  sqlite3_stmt* stmt = NULL;
+  sqlite3* db = db_handle(ctx);
+  int step_rc = SQLITE_ERROR;
+
+  if (db == NULL || out_membership == NULL) {
+    return -1;
+  }
+
+  memset(out_membership, 0, sizeof(*out_membership));
+  if (prepare_statement(db, &stmt, sql) != 0 ||
+      bind_int_value(db, stmt, 1, user_id,
+                     "db_find_user_group_membership") != 0 ||
+      bind_int_value(db, stmt, 2, group_id,
+                     "db_find_user_group_membership") != 0) {
+    return finish_statement(stmt, -1);
+  }
+
+  step_rc = sqlite3_step(stmt);
+  if (step_rc == SQLITE_DONE) {
+    return finish_statement(stmt, 0);
+  }
+  if (step_rc != SQLITE_ROW ||
+      load_group_membership_from_stmt(stmt, user_id, out_membership) != 0) {
+    fprintf(stderr, "db_find_user_group_membership: query failed: %s\n",
+            sqlite3_errmsg(db));
+    return finish_statement(stmt, -1);
+  }
+
+  return finish_statement(stmt, 1);
 }
 
 int db_create_file_metadata(server_context_t* ctx,

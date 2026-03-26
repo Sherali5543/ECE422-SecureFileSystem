@@ -21,6 +21,7 @@ typedef struct {
   char* body;
   cJSON* json;
   const char* filepath;
+  const char* group_name;
   const char* wrapped_fek_owner_hex;
   const char* wrapped_fek_group_hex;
   const char* wrapped_fek_other_hex;
@@ -411,6 +412,17 @@ static int is_valid_logical_path(const char* path) {
   return path[strlen(path) - 1] != '/';
 }
 
+static int is_valid_group_name(const char* group_name) {
+  size_t len = 0;
+
+  if (group_name == NULL) {
+    return 0;
+  }
+
+  len = strlen(group_name);
+  return len > 0 && len < DB_GROUP_NAME_MAX;
+}
+
 static int has_metadata_permission(server_context_t* ctx, int user_id,
                                    const db_file_metadata_t* meta,
                                    int owner_mask, int group_mask,
@@ -722,6 +734,7 @@ static int parse_create_file_request(http_message_t* msg, SSL* ssl,
                                      create_file_request_t* out_req,
                                      size_t* out_body_bytes_read) {
   cJSON* filepath_json = NULL;
+  cJSON* group_name_json = NULL;
   cJSON* wrapped_owner_json = NULL;
   cJSON* wrapped_group_json = NULL;
   cJSON* wrapped_other_json = NULL;
@@ -768,6 +781,8 @@ static int parse_create_file_request(http_message_t* msg, SSL* ssl,
   }
 
   filepath_json = cJSON_GetObjectItemCaseSensitive(out_req->json, "filepath");
+  group_name_json =
+      cJSON_GetObjectItemCaseSensitive(out_req->json, "group_name");
   if (!cJSON_IsString(filepath_json) || filepath_json->valuestring == NULL) {
     send_bad_request(response, ssl);
     return -1;
@@ -778,6 +793,13 @@ static int parse_create_file_request(http_message_t* msg, SSL* ssl,
       !is_valid_logical_path(out_req->filepath)) {
     send_json_error(ssl, response, 400, "Bad Request",
                     "{\"error\":\"invalid filepath\"}");
+    return -1;
+  }
+  if (group_name_json != NULL &&
+      (!cJSON_IsString(group_name_json) || group_name_json->valuestring == NULL ||
+       !is_valid_group_name(group_name_json->valuestring))) {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"invalid group_name\"}");
     return -1;
   }
 
@@ -808,6 +830,8 @@ static int parse_create_file_request(http_message_t* msg, SSL* ssl,
   }
 
   out_req->wrapped_fek_owner_hex = wrapped_owner_json->valuestring;
+  out_req->group_name =
+      group_name_json ? group_name_json->valuestring : NULL;
   out_req->wrapped_fek_group_hex =
       wrapped_group_json ? wrapped_group_json->valuestring : NULL;
   out_req->wrapped_fek_other_hex =
@@ -1124,6 +1148,14 @@ static int populate_new_file_metadata(const create_file_request_t* req,
     return -1;
   }
 
+  if (out_meta->has_group_id && (out_meta->mode_bits & 0070) != 0 &&
+      !out_meta->has_wrapped_fek_group) {
+    return -1;
+  }
+  if ((out_meta->mode_bits & 0007) != 0 && !out_meta->has_wrapped_fek_other) {
+    return -1;
+  }
+
   return 0;
 }
 
@@ -1412,9 +1444,11 @@ void create_file(http_message_t* msg, SSL* ssl, http_message_t* response,
   char parent_path[DB_FILE_PATH_MAX];
   char file_name[DB_FILE_NAME_MAX];
   server_session_t session;
+  db_group_t selected_group;
   db_file_metadata_t parent_meta;
   db_file_metadata_t existing_meta;
   db_file_metadata_t new_meta;
+  int is_group_member = 0;
   size_t body_bytes_read = 0;
   int metadata_id = 0;
   int rc = 0;
@@ -1476,9 +1510,45 @@ void create_file(http_message_t* msg, SSL* ssl, http_message_t* response,
 
   if (populate_new_file_metadata(&req, file_name, &session, &parent_meta,
                                  &new_meta) != 0) {
-    send_json_error(ssl, response, 500, "Internal Server Error",
-                    "{\"error\":\"failed to build file metadata\"}");
+    send_json_error(
+        ssl, response, 400, "Bad Request",
+        "{\"error\":\"wrapped FEKs do not match the selected file access\"}");
     goto cleanup;
+  }
+
+  if (req.group_name != NULL) {
+    rc = db_find_group_by_name(ctx, req.group_name, &selected_group);
+    if (rc == -1) {
+      send_json_error(ssl, response, 500, "Internal Server Error",
+                      "{\"error\":\"failed to load group\"}");
+      goto cleanup;
+    }
+    if (rc == 0) {
+      send_json_error(ssl, response, 404, "Not Found",
+                      "{\"error\":\"group not found\"}");
+      goto cleanup;
+    }
+
+    if (db_is_user_in_group(ctx, session.user_id, selected_group.id,
+                            &is_group_member) != 0) {
+      send_json_error(ssl, response, 500, "Internal Server Error",
+                      "{\"error\":\"failed to verify group membership\"}");
+      goto cleanup;
+    }
+    if (!is_group_member) {
+      send_json_error(ssl, response, 403, "Forbidden",
+                      "{\"error\":\"user is not a member of the requested group\"}");
+      goto cleanup;
+    }
+
+    new_meta.group_id = selected_group.id;
+    new_meta.has_group_id = 1;
+    if ((new_meta.mode_bits & 0070) != 0 && !new_meta.has_wrapped_fek_group) {
+      send_json_error(
+          ssl, response, 400, "Bad Request",
+          "{\"error\":\"wrapped_fek_group is required when group access is enabled\"}");
+      goto cleanup;
+    }
   }
 
   if (create_file_metadata_and_backing_file(ctx, &new_meta, &metadata_id) !=
