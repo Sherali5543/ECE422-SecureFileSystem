@@ -114,4 +114,14 @@ assert_status "200"
 assert_body_equals "$OVERWRITE_BODY"
 echo "Overwrite read OK"
 
-echo "Server-side create/write/read test passed"
+perform_request "delete" "DELETE" \
+  "${BASE_URL}/files?filepath=${FILEPATH}"
+assert_status "200"
+echo "Delete OK"
+
+perform_request "read_after_delete" "GET" \
+  "${BASE_URL}/files/contents?filepath=${FILEPATH}"
+assert_status "404"
+echo "Read after delete OK"
+
+echo "Server-side create/write/read/delete test passed"

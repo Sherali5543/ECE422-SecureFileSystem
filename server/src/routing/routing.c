@@ -58,7 +58,8 @@ http_message_t* handle_request(http_message_t* msg, SSL* ssl, server_context_t *
       break;
     case DELETE:
       if (strncmp(msg->path, "/files", HTTP_MAX_PATH_LEN) == 0) {
-        // Handle rm
+        delete_file(msg, ssl, res, ctx);
+        return res;
       }
       break;
     case UNKNOWN:

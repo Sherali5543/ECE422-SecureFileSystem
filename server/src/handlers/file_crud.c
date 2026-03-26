@@ -317,6 +317,33 @@ static int can_access_file(server_context_t* ctx, int user_id,
   return (meta->mode_bits & other_mask) != 0;
 }
 
+static int delete_file_metadata_and_backing_file(server_context_t* ctx,
+                                                 const char* filepath) {
+  int rc = 0;
+
+  if (!ctx || !filepath) {
+    return -1;
+  }
+
+  if (db_begin_transaction(ctx) != 0) {
+    return -1;
+  }
+
+  rc = db_delete_file_metadata(ctx, filepath, strlen(filepath));
+  if (rc != 1) {
+    db_rollback(ctx);
+    return rc < 0 ? -1 : 0;
+  }
+
+  if (db_commit(ctx) != 0) {
+    db_rollback(ctx);
+    return -1;
+  }
+
+  delete_backing_file(ctx, filepath);
+  return 1;
+}
+
 static void cleanup_create_file_request(create_file_request_t* req) {
   if (!req) {
     return;
@@ -762,4 +789,70 @@ void read_file(http_message_t* msg, SSL* ssl, http_message_t* response,
   }
 
   close(fd);
+}
+
+void delete_file(http_message_t* msg, SSL* ssl, http_message_t* response,
+                 server_context_t* ctx) {
+  filepath_query_t query = {0};
+  server_session_t session;
+  db_file_metadata_t meta;
+  int rc = 0;
+
+  if (!msg || !ssl || !response || !ctx) {
+    return;
+  }
+
+  if (msg->auth_token[0] == '\0') {
+    send_json_error(ssl, response, 401, "Unauthorized",
+                    "{\"error\":\"missing bearer token\"}");
+    return;
+  }
+  if (parse_filepath_query(msg, &query) != 0) {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"missing or invalid filepath query\"}");
+    return;
+  }
+  if (get_user_from_token(ctx, msg->auth_token, &session) != 0) {
+    send_json_error(ssl, response, 401, "Unauthorized",
+                    "{\"error\":\"invalid or expired token\"}");
+    return;
+  }
+
+  rc = db_find_file_metadata_by_path(ctx, query.filepath, strlen(query.filepath),
+                                     &meta);
+  if (rc == -1) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to load file metadata\"}");
+    return;
+  }
+  if (rc == 0) {
+    send_json_error(ssl, response, 404, "Not Found",
+                    "{\"error\":\"file not found\"}");
+    return;
+  }
+  if (strcmp(meta.object_type, "file") != 0) {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"filepath is not a file\"}");
+    return;
+  }
+  if (!can_access_file(ctx, session.user_id, &meta, 0200, 0020, 0002)) {
+    send_json_error(ssl, response, 403, "Forbidden",
+                    "{\"error\":\"insufficient permissions\"}");
+    return;
+  }
+
+  rc = delete_file_metadata_and_backing_file(ctx, query.filepath);
+  if (rc < 0) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to delete file\"}");
+    return;
+  }
+  if (rc == 0) {
+    send_json_error(ssl, response, 404, "Not Found",
+                    "{\"error\":\"file not found\"}");
+    return;
+  }
+
+  send_json_error(ssl, response, 200, "OK",
+                  "{\"message\":\"file deleted\"}");
 }
