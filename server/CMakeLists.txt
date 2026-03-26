@@ -11,6 +11,7 @@ add_executable(server
     src/db/schema_helper.c
     src/routing/routing.c
     src/handlers/file_crud.c
+    src/handlers/group_crud.c
 )
 
 target_link_libraries(server PRIVATE

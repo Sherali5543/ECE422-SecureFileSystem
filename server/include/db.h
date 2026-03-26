@@ -86,6 +86,7 @@ int db_create_group(server_context_t* ctx, const char* group_name,
 int db_add_user_to_group(server_context_t* ctx, int user_id, int group_id,
                          const void* wrapped_group_key,
                          size_t wrapped_group_key_len);
+int db_remove_user_from_group(server_context_t* ctx, int user_id, int group_id);
 int db_is_user_in_group(server_context_t* ctx, int user_id, int group_id,
                         int* out_is_member);
 int db_get_user_groups(server_context_t* ctx, int user_id,
