@@ -1,11 +1,19 @@
 #ifndef ENCRYPTION_H
 #define ENCRYPTION_H
 
+#include <sodium.h>
+
 #include "common_encryption.h"
 
-typedef struct UserKeys UserKeys;
+typedef struct UserKeys {
+    unsigned char public_key[crypto_box_PUBLICKEYBYTES];
+    unsigned char secret_key[crypto_box_SECRETKEYBYTES];
+} UserKeys;
 
-typedef struct SignKeys SignKeys;
+typedef struct SignKeys {
+    unsigned char public_key[crypto_sign_PUBLICKEYBYTES];
+    unsigned char secret_key[crypto_sign_SECRETKEYBYTES];
+} SignKeys;
 
 // The user's pair is a public encrypt keypair, generated deterministically
 // using the user's username and plaintext password
@@ -59,6 +67,10 @@ char* generate_file_hash(char* filepath);
 // generates the signature of the specified hash by encrypting
 // it with the user's signing keys
 char* generate_hash_signature(char* hash, SignKeys* sign_keys);
+
+// signs an arbitrary byte buffer using the user's signing keys
+char* generate_bytes_signature(const unsigned char* bytes, size_t len,
+                               SignKeys* sign_keys);
 
 // decrypts the specified file using the given file key
 //
