@@ -11,7 +11,7 @@
 #define HTTP_MAX_QUERY_LEN 2048
 #define HTTP_MAX_VERSION_LEN 16
 #define HTTP_MAX_HEADER_NAME 64
-#define HTTP_MAX_HEADER_VALUE 1024
+#define HTTP_MAX_HEADER_VALUE 4096
 #define HTTP_MAX_HEADERS 32
 #define HTTP_MAX_TOKEN_LEN 256
 #define HTTP_MAX_CONTENT_TYPE 128
@@ -20,7 +20,7 @@
   (HTTP_MAX_METHOD_LEN + HTTP_MAX_PATH_LEN + HTTP_MAX_QUERY_LEN + \
    HTTP_MAX_VERSION_LEN)
 #define HTTP_MAX_HEADER_LEN (HTTP_MAX_HEADER_NAME + HTTP_MAX_HEADER_VALUE)
-#define HTTP_MAX_PREAMBLE_LEN (HTTP_MAX_START_LEN + HTTP_MAX_HEADER_LEN * 5 + 2)
+#define HTTP_MAX_PREAMBLE_LEN (HTTP_MAX_START_LEN + HTTP_MAX_HEADER_LEN * 10 + 2)
 
 typedef enum {
   UNKNOWN = 0,
@@ -51,8 +51,10 @@ typedef struct {
   size_t body_prefix_len;
   char connection[HTTP_MAX_HEADER_VALUE];
   char auth_token[HTTP_MAX_TOKEN_LEN];
-  char x_signature[HTTP_MAX_HEADER_VALUE]; 
-  time_t x_timestamp;  
+  char x_signature[HTTP_MAX_HEADER_VALUE];
+  char x_wrapped_fek[HTTP_MAX_HEADER_VALUE];
+  char x_fek_scope[HTTP_MAX_HEADER_VALUE];
+  time_t x_timestamp;
   bool has_x_timestamp;
   bool message_sent;
 } http_message_t;

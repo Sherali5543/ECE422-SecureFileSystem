@@ -21,6 +21,9 @@ typedef struct {
   char* body;
   cJSON* json;
   const char* filepath;
+  const char* wrapped_fek_owner_hex;
+  const char* wrapped_fek_group_hex;
+  const char* wrapped_fek_other_hex;
 } create_file_request_t;
 
 typedef struct {
@@ -45,6 +48,9 @@ typedef struct {
   cJSON* json;
   const char* filepath;
   int mode_bits;
+  const char* wrapped_fek_owner_hex;
+  const char* wrapped_fek_group_hex;
+  const char* wrapped_fek_other_hex;
 } permissions_request_t;
 
 typedef struct {
@@ -223,6 +229,87 @@ static int blob_to_cstring(const unsigned char* blob, size_t blob_len,
     memcpy(out, blob, blob_len);
   }
   out[blob_len] = '\0';
+  return 0;
+}
+
+static int hex_value(char c) {
+  if (c >= '0' && c <= '9') {
+    return c - '0';
+  }
+  if (c >= 'a' && c <= 'f') {
+    return 10 + (c - 'a');
+  }
+  if (c >= 'A' && c <= 'F') {
+    return 10 + (c - 'A');
+  }
+  return -1;
+}
+
+static int decode_hex_string(const char* hex, unsigned char* out,
+                             size_t out_cap, size_t* out_len) {
+  size_t hex_len = 0;
+
+  if (!hex || !out || !out_len) {
+    return -1;
+  }
+
+  hex_len = strlen(hex);
+  if ((hex_len % 2) != 0 || (hex_len / 2) > out_cap) {
+    return -1;
+  }
+
+  for (size_t i = 0; i < hex_len; i += 2) {
+    int hi = hex_value(hex[i]);
+    int lo = hex_value(hex[i + 1]);
+    if (hi < 0 || lo < 0) {
+      return -1;
+    }
+    out[i / 2] = (unsigned char)((hi << 4) | lo);
+  }
+
+  *out_len = hex_len / 2;
+  return 0;
+}
+
+static int encode_hex_string(const unsigned char* data, size_t data_len,
+                             char* out, size_t out_cap) {
+  static const char hex_chars[] = "0123456789abcdef";
+
+  if (!out || out_cap == 0) {
+    return -1;
+  }
+  if ((data_len > 0 && data == NULL) || (data_len * 2 + 1) > out_cap) {
+    return -1;
+  }
+
+  for (size_t i = 0; i < data_len; i++) {
+    out[i * 2] = hex_chars[(data[i] >> 4) & 0x0F];
+    out[i * 2 + 1] = hex_chars[data[i] & 0x0F];
+  }
+  out[data_len * 2] = '\0';
+  return 0;
+}
+
+static int set_wrapped_fek_from_hex(const char* hex, int required,
+                                    unsigned char* out_buf,
+                                    size_t out_buf_cap, size_t* out_len,
+                                    int* out_has_value) {
+  if (!out_buf || !out_len || !out_has_value) {
+    return -1;
+  }
+
+  *out_len = 0;
+  *out_has_value = 0;
+  if (hex == NULL) {
+    return required ? -1 : 0;
+  }
+  if (hex[0] == '\0') {
+    return required ? -1 : 0;
+  }
+  if (decode_hex_string(hex, out_buf, out_buf_cap, out_len) != 0) {
+    return -1;
+  }
+  *out_has_value = 1;
   return 0;
 }
 
@@ -408,6 +495,43 @@ static int can_access_directory(server_context_t* ctx, int user_id,
   }
   return has_metadata_permission(ctx, user_id, meta, owner_mask, group_mask,
                                  other_mask);
+}
+
+static int resolve_fek_access_scope(server_context_t* ctx, int user_id,
+                                    const db_file_metadata_t* meta,
+                                    const unsigned char** out_wrapped_fek,
+                                    size_t* out_wrapped_fek_len,
+                                    const char** out_scope) {
+  int is_member = 0;
+
+  if (!ctx || !meta || !out_wrapped_fek || !out_wrapped_fek_len || !out_scope) {
+    return -1;
+  }
+
+  if (meta->owner_id == user_id && meta->has_wrapped_fek_owner) {
+    *out_wrapped_fek = meta->wrapped_fek_owner;
+    *out_wrapped_fek_len = meta->wrapped_fek_owner_len;
+    *out_scope = "owner";
+    return 0;
+  }
+
+  if (meta->has_group_id && meta->has_wrapped_fek_group &&
+      db_is_user_in_group(ctx, user_id, meta->group_id, &is_member) == 0 &&
+      is_member) {
+    *out_wrapped_fek = meta->wrapped_fek_group;
+    *out_wrapped_fek_len = meta->wrapped_fek_group_len;
+    *out_scope = "group";
+    return 0;
+  }
+
+  if (meta->has_wrapped_fek_other) {
+    *out_wrapped_fek = meta->wrapped_fek_other;
+    *out_wrapped_fek_len = meta->wrapped_fek_other_len;
+    *out_scope = "other";
+    return 0;
+  }
+
+  return -1;
 }
 
 static int is_subpath_of(const char* parent, const char* candidate) {
@@ -598,6 +722,9 @@ static int parse_create_file_request(http_message_t* msg, SSL* ssl,
                                      create_file_request_t* out_req,
                                      size_t* out_body_bytes_read) {
   cJSON* filepath_json = NULL;
+  cJSON* wrapped_owner_json = NULL;
+  cJSON* wrapped_group_json = NULL;
+  cJSON* wrapped_other_json = NULL;
 
   if (!msg || !ssl || !response || !out_req || !out_body_bytes_read) {
     return -1;
@@ -653,6 +780,38 @@ static int parse_create_file_request(http_message_t* msg, SSL* ssl,
                     "{\"error\":\"invalid filepath\"}");
     return -1;
   }
+
+  wrapped_owner_json =
+      cJSON_GetObjectItemCaseSensitive(out_req->json, "wrapped_fek_owner");
+  wrapped_group_json =
+      cJSON_GetObjectItemCaseSensitive(out_req->json, "wrapped_fek_group");
+  wrapped_other_json =
+      cJSON_GetObjectItemCaseSensitive(out_req->json, "wrapped_fek_other");
+
+  if (!cJSON_IsString(wrapped_owner_json) ||
+      wrapped_owner_json->valuestring == NULL ||
+      wrapped_owner_json->valuestring[0] == '\0') {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"wrapped_fek_owner is required\"}");
+    return -1;
+  }
+
+  if (wrapped_group_json != NULL && !cJSON_IsString(wrapped_group_json)) {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"invalid wrapped_fek_group\"}");
+    return -1;
+  }
+  if (wrapped_other_json != NULL && !cJSON_IsString(wrapped_other_json)) {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"invalid wrapped_fek_other\"}");
+    return -1;
+  }
+
+  out_req->wrapped_fek_owner_hex = wrapped_owner_json->valuestring;
+  out_req->wrapped_fek_group_hex =
+      wrapped_group_json ? wrapped_group_json->valuestring : NULL;
+  out_req->wrapped_fek_other_hex =
+      wrapped_other_json ? wrapped_other_json->valuestring : NULL;
 
   return 0;
 }
@@ -826,6 +985,9 @@ static int parse_permissions_request(http_message_t* msg, SSL* ssl,
                                      size_t* out_body_bytes_read) {
   cJSON* filepath_json = NULL;
   cJSON* mode_bits_json = NULL;
+  cJSON* wrapped_owner_json = NULL;
+  cJSON* wrapped_group_json = NULL;
+  cJSON* wrapped_other_json = NULL;
 
   if (!msg || !ssl || !response || !out_req || !out_body_bytes_read) {
     return -1;
@@ -868,12 +1030,40 @@ static int parse_permissions_request(http_message_t* msg, SSL* ssl,
 
   filepath_json = cJSON_GetObjectItemCaseSensitive(out_req->json, "filepath");
   mode_bits_json = cJSON_GetObjectItemCaseSensitive(out_req->json, "mode_bits");
+  wrapped_owner_json =
+      cJSON_GetObjectItemCaseSensitive(out_req->json, "wrapped_fek_owner");
+  wrapped_group_json =
+      cJSON_GetObjectItemCaseSensitive(out_req->json, "wrapped_fek_group");
+  wrapped_other_json =
+      cJSON_GetObjectItemCaseSensitive(out_req->json, "wrapped_fek_other");
   if (!cJSON_IsString(filepath_json) || filepath_json->valuestring == NULL) {
     send_bad_request(response, ssl);
     return -1;
   }
 
+  if (wrapped_owner_json != NULL && !cJSON_IsString(wrapped_owner_json)) {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"invalid wrapped_fek_owner\"}");
+    return -1;
+  }
+  if (wrapped_group_json != NULL && !cJSON_IsString(wrapped_group_json)) {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"invalid wrapped_fek_group\"}");
+    return -1;
+  }
+  if (wrapped_other_json != NULL && !cJSON_IsString(wrapped_other_json)) {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"invalid wrapped_fek_other\"}");
+    return -1;
+  }
+
   out_req->filepath = filepath_json->valuestring;
+  out_req->wrapped_fek_owner_hex =
+      wrapped_owner_json ? wrapped_owner_json->valuestring : NULL;
+  out_req->wrapped_fek_group_hex =
+      wrapped_group_json ? wrapped_group_json->valuestring : NULL;
+  out_req->wrapped_fek_other_hex =
+      wrapped_other_json ? wrapped_other_json->valuestring : NULL;
   if (strlen(out_req->filepath) >= DB_FILE_PATH_MAX ||
       !is_valid_logical_path(out_req->filepath) ||
       parse_mode_bits_json(mode_bits_json, &out_req->mode_bits) != 0) {
@@ -885,7 +1075,8 @@ static int parse_permissions_request(http_message_t* msg, SSL* ssl,
   return 0;
 }
 
-static int populate_new_file_metadata(const char* filepath, const char* file_name,
+static int populate_new_file_metadata(const create_file_request_t* req,
+                                      const char* file_name,
                                       const server_session_t* session,
                                       const db_file_metadata_t* parent_meta,
                                       db_file_metadata_t* out_meta) {
@@ -893,16 +1084,17 @@ static int populate_new_file_metadata(const char* filepath, const char* file_nam
   size_t file_name_len = 0;
   long long now = 0;
 
-  if (!filepath || !file_name || !session || !parent_meta || !out_meta) {
+  if (!req || !req->filepath || !file_name || !session || !parent_meta ||
+      !out_meta) {
     return -1;
   }
 
-  filepath_len = strlen(filepath);
+  filepath_len = strlen(req->filepath);
   file_name_len = strlen(file_name);
   now = (long long)time(NULL);
 
   memset(out_meta, 0, sizeof(*out_meta));
-  memcpy(out_meta->path, filepath, filepath_len);
+  memcpy(out_meta->path, req->filepath, filepath_len);
   out_meta->path_len = filepath_len;
   memcpy(out_meta->name, file_name, file_name_len);
   out_meta->name_len = file_name_len;
@@ -913,6 +1105,87 @@ static int populate_new_file_metadata(const char* filepath, const char* file_nam
   strncpy(out_meta->object_type, "file", sizeof(out_meta->object_type) - 1);
   out_meta->created_at = now;
   out_meta->updated_at = now;
+
+  if (set_wrapped_fek_from_hex(req->wrapped_fek_owner_hex, 1,
+                               out_meta->wrapped_fek_owner,
+                               sizeof(out_meta->wrapped_fek_owner),
+                               &out_meta->wrapped_fek_owner_len,
+                               &out_meta->has_wrapped_fek_owner) != 0 ||
+      set_wrapped_fek_from_hex(req->wrapped_fek_group_hex, 0,
+                               out_meta->wrapped_fek_group,
+                               sizeof(out_meta->wrapped_fek_group),
+                               &out_meta->wrapped_fek_group_len,
+                               &out_meta->has_wrapped_fek_group) != 0 ||
+      set_wrapped_fek_from_hex(req->wrapped_fek_other_hex, 0,
+                               out_meta->wrapped_fek_other,
+                               sizeof(out_meta->wrapped_fek_other),
+                               &out_meta->wrapped_fek_other_len,
+                               &out_meta->has_wrapped_fek_other) != 0) {
+    return -1;
+  }
+
+  return 0;
+}
+
+static int apply_wrapped_feks_for_mode_bits(const permissions_request_t* req,
+                                            db_file_metadata_t* meta) {
+  int group_enabled = 0;
+  int other_enabled = 0;
+
+  if (!req || !meta) {
+    return -1;
+  }
+
+  if (req->wrapped_fek_owner_hex != NULL &&
+      set_wrapped_fek_from_hex(req->wrapped_fek_owner_hex, 1,
+                               meta->wrapped_fek_owner,
+                               sizeof(meta->wrapped_fek_owner),
+                               &meta->wrapped_fek_owner_len,
+                               &meta->has_wrapped_fek_owner) != 0) {
+    return -1;
+  }
+  if (!meta->has_wrapped_fek_owner) {
+    return -1;
+  }
+
+  group_enabled = meta->has_group_id && ((req->mode_bits & 0070) != 0);
+  other_enabled = (req->mode_bits & 0007) != 0;
+
+  if (group_enabled) {
+    if (req->wrapped_fek_group_hex != NULL &&
+        set_wrapped_fek_from_hex(req->wrapped_fek_group_hex, 1,
+                                 meta->wrapped_fek_group,
+                                 sizeof(meta->wrapped_fek_group),
+                                 &meta->wrapped_fek_group_len,
+                                 &meta->has_wrapped_fek_group) != 0) {
+      return -1;
+    }
+    if (!meta->has_wrapped_fek_group) {
+      return -1;
+    }
+  } else {
+    meta->has_wrapped_fek_group = 0;
+    meta->wrapped_fek_group_len = 0;
+    memset(meta->wrapped_fek_group, 0, sizeof(meta->wrapped_fek_group));
+  }
+
+  if (other_enabled) {
+    if (req->wrapped_fek_other_hex != NULL &&
+        set_wrapped_fek_from_hex(req->wrapped_fek_other_hex, 1,
+                                 meta->wrapped_fek_other,
+                                 sizeof(meta->wrapped_fek_other),
+                                 &meta->wrapped_fek_other_len,
+                                 &meta->has_wrapped_fek_other) != 0) {
+      return -1;
+    }
+    if (!meta->has_wrapped_fek_other) {
+      return -1;
+    }
+  } else {
+    meta->has_wrapped_fek_other = 0;
+    meta->wrapped_fek_other_len = 0;
+    memset(meta->wrapped_fek_other, 0, sizeof(meta->wrapped_fek_other));
+  }
 
   return 0;
 }
@@ -1201,8 +1474,8 @@ void create_file(http_message_t* msg, SSL* ssl, http_message_t* response,
     goto cleanup;
   }
 
-  if (populate_new_file_metadata(req.filepath, file_name, &session,
-                                 &parent_meta, &new_meta) != 0) {
+  if (populate_new_file_metadata(&req, file_name, &session, &parent_meta,
+                                 &new_meta) != 0) {
     send_json_error(ssl, response, 500, "Internal Server Error",
                     "{\"error\":\"failed to build file metadata\"}");
     goto cleanup;
@@ -1654,6 +1927,11 @@ void update_file_permissions(http_message_t* msg, SSL* ssl,
   }
 
   meta.mode_bits = req.mode_bits;
+  if (apply_wrapped_feks_for_mode_bits(&req, &meta) != 0) {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"wrapped FEKs do not match requested permissions\"}");
+    goto cleanup;
+  }
   meta.updated_at = (long long)time(NULL);
   rc = db_update_file_metadata(ctx, req.filepath, strlen(req.filepath), &meta);
   if (rc < 0) {
@@ -1805,6 +2083,10 @@ void read_file(http_message_t* msg, SSL* ssl, http_message_t* response,
   filepath_query_t query = {0};
   server_session_t session;
   db_file_metadata_t meta;
+  const unsigned char* selected_wrapped_fek = NULL;
+  size_t selected_wrapped_fek_len = 0;
+  const char* fek_scope = NULL;
+  char wrapped_fek_hex[HTTP_MAX_HEADER_VALUE];
   char storage_path[STORAGE_PATH_MAX];
   char buf[1024];
   struct stat st;
@@ -1848,6 +2130,14 @@ void read_file(http_message_t* msg, SSL* ssl, http_message_t* response,
                     "{\"error\":\"insufficient permissions\"}");
     return;
   }
+  if (resolve_fek_access_scope(ctx, session.user_id, &meta, &selected_wrapped_fek,
+                               &selected_wrapped_fek_len, &fek_scope) != 0 ||
+      encode_hex_string(selected_wrapped_fek, selected_wrapped_fek_len,
+                        wrapped_fek_hex, sizeof(wrapped_fek_hex)) != 0) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to resolve wrapped FEK\"}");
+    return;
+  }
   if (build_storage_path(ctx, query.filepath, storage_path,
                          sizeof(storage_path)) != 0) {
     send_json_error(ssl, response, 500, "Internal Server Error",
@@ -1875,6 +2165,11 @@ void read_file(http_message_t* msg, SSL* ssl, http_message_t* response,
   response->content_length = (size_t)st.st_size;
   strncpy(response->connection, "close", sizeof(response->connection) - 1);
   response->connection[sizeof(response->connection) - 1] = '\0';
+  strncpy(response->x_wrapped_fek, wrapped_fek_hex,
+          sizeof(response->x_wrapped_fek) - 1);
+  response->x_wrapped_fek[sizeof(response->x_wrapped_fek) - 1] = '\0';
+  strncpy(response->x_fek_scope, fek_scope, sizeof(response->x_fek_scope) - 1);
+  response->x_fek_scope[sizeof(response->x_fek_scope) - 1] = '\0';
   send_response(ssl, response);
 
   while (1) {
