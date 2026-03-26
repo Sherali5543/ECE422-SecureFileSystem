@@ -11,22 +11,42 @@
 #include <stdbool.h>
 #include <unistd.h>
 
+// youll have to free the metadata when you are done
+http_message_t* request_metadata(char* filepath, Session* s){
+    http_message_t* msg = init_request();
+    msg->method = GET;
 
+    char request_endpoint[512];
+    snprintf(request_endpoint, sizeof(request_endpoint), 
+        "/files/content?path=%s", filepath);
+    
+    strncpy(msg->path, request_endpoint, HTTP_MAX_PATH_LEN);
+    send_request(s->ssl, msg);
+    tls_write(s->ssl, NULL, 0);
+    destroy_message(msg);
 
-void read_file(char* path, Session* s){
+    // get the response
+    msg = read_response(s->ssl);
+
+    return msg;
+}
+
+void read_file(char* filepath, char* filename, Session* s){
     // ask server for file
     http_message_t* msg = init_request();
     msg->method = GET;
 
-    char request_endpoint[256] = "/files/content?path=";
-    strcat(request_endpoint, path);
+    char request_endpoint[512];
+    snprintf(request_endpoint, sizeof(request_endpoint), 
+        "/files/content?path=%s/%s", filepath, filename);
+
     strncpy(msg->path, request_endpoint, HTTP_MAX_PATH_LEN);
 
     send_request(s->ssl, msg);
     tls_write(s->ssl, NULL, 0);
     destroy_message(msg);
     
-    //get back request
+    // get back request which is the file as a stream
     msg = read_response(s->ssl);
     // decrypt file
     
@@ -34,13 +54,15 @@ void read_file(char* path, Session* s){
 
 }
 
-void write_file(char* path, Session* s){
+void write_file(char* filepath, char* filename, Session* s){
     // ask server for file
     http_message_t* msg = init_request();
     msg->method = GET;
 
-    char request_endpoint[256] = "/files/content?path=";
-    strcat(request_endpoint, path);
+    char request_endpoint[512];
+    snprintf(request_endpoint, sizeof(request_endpoint), 
+        "/files/content?path=%s/%s", filepath, filename);
+
     strncpy(msg->path, request_endpoint, HTTP_MAX_PATH_LEN);
 
     send_request(s->ssl, msg);
@@ -52,6 +74,19 @@ void write_file(char* path, Session* s){
     // decrypt file
     
     // create temp file and open it with the contents of the file
+
+    char template[] = "/tmp/sfs_write_XXXXXX";
+    int fd = mkstemp(template);
+
+    if (fd == -1) {
+        perror("mkstemp");
+        return;
+    }
+    close(fd); 
+
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "vi %s", template);
+    system(cmd);
 
     // send updated file to server
 }
@@ -91,7 +126,10 @@ void create_file(char* filepath, char* filename, Session* s){
     msg->content_type = JSON;
     cJSON* json = cJSON_CreateObject();
 
-    cJSON_AddStringToObject(json, "path", );
+
+    char fullpath[512];
+    snprintf(fullpath, sizeof(fullpath), "%s/%s", filepath, filename);
+    cJSON_AddStringToObject(json, "path", fullpath);
 
     char* body = cJSON_PrintUnformatted(json);
     msg->content_length = strlen(body);
@@ -107,12 +145,14 @@ void create_file(char* filepath, char* filename, Session* s){
     // just need to read call back
 }
 
-void delete_file(char* filepath, Session* s){
+void delete_file(char* filepath, char* filename, Session* s){
     http_message_t* msg = init_request();
     msg->method = DELETE;
 
-    char request_endpoint[256] = "/files?path=";
-    strcat(request_endpoint, filepath);
+    char request_endpoint[512];
+    snprintf(request_endpoint, sizeof(request_endpoint), 
+        "/files?path=%s/%s", filepath, filename);
+
     strncpy(msg->path, request_endpoint, HTTP_MAX_PATH_LEN);
 
     send_request(s->ssl, msg);
@@ -122,4 +162,3 @@ void delete_file(char* filepath, Session* s){
     //get back request
     msg = read_response(s->ssl);
 }
-

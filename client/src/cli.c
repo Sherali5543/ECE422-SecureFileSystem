@@ -34,11 +34,15 @@ void cli_loop(Session *session){
         } else if (strcmp(cmd, "mkdir") == 0) {
             printf("'mkdir' not yet implemented!\n");
         } else if (strcmp(cmd, "rm") == 0) {
-            printf("'rm' not yet implemented!\n");
+            delete_file(pwd, args[1]);
         } else if (strcmp(cmd, "mv") == 0) {
             printf("'mv' not yet implemented!\n");
         } else if (strcmp(cmd, "create") == 0){
             create_file(pwd, args[1], session);
+        } else if (strcmp(cmd, "read") == 0){
+            read_file(pwd, args[1], session);
+        } else if (strcmp(cmd, "write") == 0){
+            write_file(pwd, args[1], session);
         } else if (strcmp(cmd, "chmod") == 0){
             printf("'chmod' not yet implemented!\n");
         } else if (strcmp(cmd, "logout") == 0){
