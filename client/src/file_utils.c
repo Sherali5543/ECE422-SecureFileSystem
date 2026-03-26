@@ -11,11 +11,56 @@
 #include <stdbool.h>
 #include <unistd.h>
 
-enum ACCESS_TYPE {
+static int decode_hex_string(const char* hex, unsigned char* out,
+                             size_t out_cap, size_t* out_len) {
+  size_t hex_len = 0;
+
+  if (!hex || !out || !out_len) {
+    return -1;
+  }
+
+  hex_len = strlen(hex);
+  if ((hex_len % 2) != 0 || (hex_len / 2) > out_cap) {
+    return -1;
+  }
+
+  for (size_t i = 0; i < hex_len; i += 2) {
+    int hi = hex_value(hex[i]);
+    int lo = hex_value(hex[i + 1]);
+    if (hi < 0 || lo < 0) {
+      return -1;
+    }
+    out[i / 2] = (unsigned char)((hi << 4) | lo);
+  }
+
+  *out_len = hex_len / 2;
+  return 0;
+}
+
+static int encode_hex_string(const unsigned char* data, size_t data_len,
+                             char* out, size_t out_cap) {
+  static const char hex_chars[] = "0123456789abcdef";
+
+  if (!out || out_cap == 0) {
+    return -1;
+  }
+  if ((data_len > 0 && data == NULL) || (data_len * 2 + 1) > out_cap) {
+    return -1;
+  }
+
+  for (size_t i = 0; i < data_len; i++) {
+    out[i * 2] = hex_chars[(data[i] >> 4) & 0x0F];
+    out[i * 2 + 1] = hex_chars[data[i] & 0x0F];
+  }
+  out[data_len * 2] = '\0';
+  return 0;
+}
+
+typedef enum ACCESS_TYPE {
     OWNER,
     GROUP,
     OTHER
-};
+} ACCESS_TYPE;
 
 // youll have to free the metadata when you are done
 http_message_t* request_metadata(char* filepath, Session* s){
@@ -116,28 +161,41 @@ void write_file(char* pwd, char* filename, Session* s){
     destroy_message(msg);
     
     //get back request
-    // msg = read_response(s->ssl);
+    msg = read_response(s->ssl);
    
-    // cJSON* key_json = msg->
+    char wrapped_key[4096];
+
+    size_t outlen;
+    
+    decode_hex_string(msg->x_wrapped_fek, wrapped_key, 4096, &outlen);
+
+    // ACCESS_TYPE at;
+    // if (strcmp()){
+
+    // }
+
+
+    char* file_key = decrypt_wrapped_user_key(s->user_keys, &wrapped_key);
+
 
     // create temp file and open it with the contents of the file
     char* buffer = calloc(msg->content_length + 1, 1);
     read_message_body(s->ssl, msg, buffer,msg->content_length);
 
-    char template[] = "/tmp/sfs_write_XXXXXX";
+    char template[] = "/tmp/sfs_raw_XXXXXX";
     int fd = mkstemp(template);
     
     write(fd, buffer, msg->content_length);
     close(fd);
 
     // decrypt file
-    decrypt_file();
+    char* d_filepath = decrypt_file(file_key, template);
 
     char cmd[256];
-    snprintf(cmd, sizeof(cmd), "vi %s", template);
+    snprintf(cmd, sizeof(cmd), "vi %s", d_filepath);
     system(cmd);
 
-    char* encrypted_file = encrypt_file()
+    char* e_filepath = encrypt_file(file_key, d_filepath);
 
     // send updated file to server
     http_message_t* final_msg = init_request();
