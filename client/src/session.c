@@ -378,6 +378,8 @@ int logout(SSL* ssl, Session* session) {
 
 Session login(SSL* ssl) {
   Session s;
+  SignKeys* sign_keys = NULL;
+  UserKeys* user_keys = NULL;
 
   memset(&s, 0, sizeof(s));
   printf("Username: ");
@@ -395,7 +397,6 @@ Session login(SSL* ssl) {
     free(username);
     return s;
   }
-  SignKeys* sign_keys = NULL;
   char* challenge_hex = NULL;
   unsigned char challenge[crypto_sign_BYTES];
   size_t challenge_len = 0;
@@ -422,18 +423,20 @@ Session login(SSL* ssl) {
   free(challenge_hex);
 
   sign_keys = generate_signing_keypair(username, pwd);
-  free(pwd);
   if (!sign_keys) {
     fprintf(stderr, "Failed to derive signing keys\n");
     free(username);
+    free(pwd);
     return s;
   }
 
   signed_challenge = generate_bytes_signature(challenge, challenge_len, sign_keys);
   free(sign_keys);
+  sign_keys = NULL;
   if (!signed_challenge) {
     fprintf(stderr, "Failed to sign login challenge\n");
     free(username);
+    free(pwd);
     return s;
   }
 
@@ -443,6 +446,7 @@ Session login(SSL* ssl) {
     fprintf(stderr, "Failed to encode login signature\n");
     free(signed_challenge);
     free(username);
+    free(pwd);
     return s;
   }
   free(signed_challenge);
@@ -451,16 +455,30 @@ Session login(SSL* ssl) {
   if (!s.token) {
     fprintf(stderr, "Login failed\n");
     free(username);
+    free(pwd);
+    memset(&s, 0, sizeof(s));
+    return s;
+  }
+
+  user_keys = generate_read_keypair(username, pwd);
+  sign_keys = generate_signing_keypair(username, pwd);
+  free(pwd);
+  pwd = NULL;
+
+  if (!user_keys || !sign_keys) {
+    free(user_keys);
+    free(sign_keys);
+    free(s.token);
+    free(username);
     memset(&s, 0, sizeof(s));
     return s;
   }
 
   s.id = 0;
   s.username = username;
-  s.user_keys = generate_read_keypair(username, pwd);
-  s.sign_keys = generate_signing_keypair(username, pwd);
+  s.user_keys = user_keys;
+  s.sign_keys = sign_keys;
   s.ssl = ssl;
-  free(pwd);
 
   return s;
 }

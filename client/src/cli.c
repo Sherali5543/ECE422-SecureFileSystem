@@ -8,11 +8,13 @@ login, logout, ls, cd, mkdir, create, read, write, rm, and mv
 #include "session.h"
 
 #define MAX_ARGS 3
-char* pwd = "/home/";
+char* pwd = "/home";
 
 void cli_loop(SSL* ssl, Session *session){
     char* args[MAX_ARGS];
     char* input;
+
+    (void)ssl;
 
     while (true) {
         printf("%s:~/path$ ", session->username);
@@ -34,7 +36,7 @@ void cli_loop(SSL* ssl, Session *session){
         } else if (strcmp(cmd, "mkdir") == 0) {
             printf("'mkdir' not yet implemented!\n");
         } else if (strcmp(cmd, "rm") == 0) {
-            delete_file(pwd, args[1]);
+            delete_file(pwd, args[1], session);
         } else if (strcmp(cmd, "mv") == 0) {
             printf("'mv' not yet implemented!\n");
         } else if (strcmp(cmd, "create") == 0){

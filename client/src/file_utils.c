@@ -1,9 +1,18 @@
 #include "file_utils.h"
+
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "cjson/cJSON.h"
 #include "encryption.h"
 #include "http.h"
 #include "tls.h"
-#include "cjson/cJSON.h"
 
+<<<<<<< Updated upstream
 #include "client.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -13,6 +22,8 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 
+=======
+>>>>>>> Stashed changes
 static int hex_value(char c) {
   if (c >= '0' && c <= '9') {
     return c - '0';
@@ -71,43 +82,38 @@ static int encode_hex_string(const unsigned char* data, size_t data_len,
   return 0;
 }
 
-typedef enum ACCESS_TYPE {
-    OWNER,
-    GROUP,
-    OTHER
-} ACCESS_TYPE;
+static int join_logical_path(const char* dir, const char* name, char* out,
+                             size_t out_size) {
+  int written = 0;
 
-// youll have to free the metadata when you are done
-http_message_t* request_metadata(char* filepath, Session* s){
-    http_message_t* msg = init_request();
-    msg->method = GET;
+  if (!dir || !name || !out || out_size == 0) {
+    return -1;
+  }
 
-    char request_endpoint[512];
-    snprintf(request_endpoint, sizeof(request_endpoint), 
-        "/files/path=%s", filepath);
-    
-    strncpy(msg->path, request_endpoint, HTTP_MAX_PATH_LEN);
-    send_request(s->ssl, msg);
-    tls_write(s->ssl, NULL, 0);
-    destroy_message(msg);
+  if (dir[0] == '\0' || strcmp(dir, "/") == 0) {
+    written = snprintf(out, out_size, "/%s", name);
+  } else if (dir[strlen(dir) - 1] == '/') {
+    written = snprintf(out, out_size, "%s%s", dir, name);
+  } else {
+    written = snprintf(out, out_size, "%s/%s", dir, name);
+  }
 
-    // get the response
-    msg = read_response(s->ssl);
-
-    return msg;
+  return (written < 0 || (size_t)written >= out_size) ? -1 : 0;
 }
 
-void read_file(char* pwd, char* filename, Session* s){
-    // first check if we like the metadata
-    http_message_t* msg = init_request();
-    msg->method = GET;
+static int read_response_body(http_message_t* msg, SSL* ssl, char** out_body) {
+  char* body = NULL;
 
-    char request_endpoint[512];
-    snprintf(request_endpoint, sizeof(request_endpoint), 
-        "/files/contents?filepath=%s/%s", pwd, filename);
+  if (!msg || !ssl || !out_body) {
+    return -1;
+  }
 
-    strncpy(msg->path, request_endpoint, HTTP_MAX_PATH_LEN);
+  body = calloc(msg->content_length + 1, 1);
+  if (!body) {
+    return -1;
+  }
 
+<<<<<<< Updated upstream
     memcpy(msg->auth_token, s->token, sizeof(msg->auth_token));
 
     send_request(s->ssl, msg);
@@ -330,28 +336,498 @@ void create_file(char* filepath, char* filename, Session* s){
     send_request(s->ssl, msg);
     tls_write(s->ssl, body, strlen(body));
     destroy_message(msg);
+=======
+  if (msg->content_length > 0 &&
+      read_message_body(ssl, msg, body, msg->content_length) !=
+          (ssize_t)msg->content_length) {
+>>>>>>> Stashed changes
     free(body);
+    return -1;
+  }
 
-    msg = read_response(s->ssl);
-    free(msg);
-
-    // just need to read call back
+  *out_body = body;
+  return 0;
 }
 
-void delete_file(char* filepath, char* filename, Session* s){
-    http_message_t* msg = init_request();
-    msg->method = DELETE;
+static void print_error_response(const char* action, http_message_t* response,
+                                 char* body) {
+  if (!response) {
+    fprintf(stderr, "%s failed: no response\n", action);
+    return;
+  }
 
-    char request_endpoint[512];
-    snprintf(request_endpoint, sizeof(request_endpoint), 
-        "/files?path=%s/%s", filepath, filename);
+  if (body && body[0] != '\0') {
+    fprintf(stderr, "%s failed: HTTP %d %s: %s\n", action,
+            response->status_code, response->reason, body);
+  } else {
+    fprintf(stderr, "%s failed: HTTP %d %s\n", action, response->status_code,
+            response->reason);
+  }
+}
 
-    strncpy(msg->path, request_endpoint, HTTP_MAX_PATH_LEN);
+static http_message_t* send_request_with_body(Session* s, http_method_t method,
+                                              const char* path,
+                                              const char* query,
+                                              http_content_type_t content_type,
+                                              const void* body,
+                                              size_t body_len) {
+  http_message_t* msg = NULL;
+  http_message_t* response = NULL;
 
-    send_request(s->ssl, msg);
-    tls_write(s->ssl, NULL, 0);
+  if (!s || !s->ssl || !s->token || !path) {
+    return NULL;
+  }
+
+  msg = init_request();
+  if (!msg) {
+    return NULL;
+  }
+
+  msg->method = method;
+  msg->content_type = content_type;
+  msg->content_length = body_len;
+  strncpy(msg->path, path, sizeof(msg->path) - 1);
+  msg->path[sizeof(msg->path) - 1] = '\0';
+  if (query) {
+    strncpy(msg->query, query, sizeof(msg->query) - 1);
+    msg->query[sizeof(msg->query) - 1] = '\0';
+  }
+  strncpy(msg->auth_token, s->token, sizeof(msg->auth_token) - 1);
+  msg->auth_token[sizeof(msg->auth_token) - 1] = '\0';
+
+  send_request(s->ssl, msg);
+  if (body_len > 0 && tls_write(s->ssl, (void*)body, body_len) !=
+                          (ssize_t)body_len) {
     destroy_message(msg);
-    
-    //get back request
-    msg = read_response(s->ssl);
+    return NULL;
+  }
+  destroy_message(msg);
+
+  response = read_response(s->ssl);
+  return response;
+}
+
+static int slurp_file(const char* filepath, unsigned char** out_buf,
+                      size_t* out_len) {
+  struct stat st;
+  unsigned char* buf = NULL;
+  int fd = -1;
+
+  if (!filepath || !out_buf || !out_len) {
+    return -1;
+  }
+
+  if (stat(filepath, &st) != 0 || st.st_size < 0) {
+    return -1;
+  }
+
+  buf = calloc((size_t)st.st_size + 1, 1);
+  if (buf == NULL) {
+    return -1;
+  }
+
+  fd = open(filepath, O_RDONLY);
+  if (fd < 0) {
+    free(buf);
+    return -1;
+  }
+
+  if (st.st_size > 0 &&
+      read(fd, buf, (size_t)st.st_size) != (ssize_t)st.st_size) {
+    close(fd);
+    free(buf);
+    return -1;
+  }
+
+  close(fd);
+  *out_buf = buf;
+  *out_len = (size_t)st.st_size;
+  return 0;
+}
+
+static int upload_encrypted_file(Session* s, const char* logical_path,
+                                 const char* encrypted_filepath) {
+  unsigned char* encrypted_bytes = NULL;
+  size_t encrypted_len = 0;
+  http_message_t* response = NULL;
+  char query[HTTP_MAX_QUERY_LEN];
+  char* body = NULL;
+  int rc = -1;
+
+  if (!s || !logical_path || !encrypted_filepath) {
+    return -1;
+  }
+
+  if (snprintf(query, sizeof(query), "filepath=%s", logical_path) < 0 ||
+      strlen(query) >= sizeof(query)) {
+    return -1;
+  }
+
+  if (slurp_file(encrypted_filepath, &encrypted_bytes, &encrypted_len) != 0) {
+    return -1;
+  }
+
+  response = send_request_with_body(s, PUT, "/files/content", query, STREAM,
+                                    encrypted_bytes, encrypted_len);
+  if (!response) {
+    goto cleanup;
+  }
+
+  if (read_response_body(response, s->ssl, &body) != 0) {
+    goto cleanup;
+  }
+
+  if (response->status_code != 200) {
+    print_error_response("write file", response, body);
+    goto cleanup;
+  }
+
+  rc = 0;
+
+cleanup:
+  free(encrypted_bytes);
+  free(body);
+  destroy_message(response);
+  return rc;
+}
+
+static int download_encrypted_file(Session* s, const char* logical_path,
+                                   char** out_encrypted_path,
+                                   char** out_file_key) {
+  http_message_t* response = NULL;
+  unsigned char wrapped_key[HTTP_MAX_HEADER_VALUE];
+  size_t wrapped_key_len = 0;
+  char query[HTTP_MAX_QUERY_LEN];
+  char* encrypted_path = NULL;
+  char* file_key = NULL;
+  char template[] = "/tmp/sfs_raw_XXXXXX";
+  int fd = -1;
+  char* body = NULL;
+  int rc = -1;
+
+  if (!s || !logical_path || !out_encrypted_path || !out_file_key) {
+    return -1;
+  }
+
+  *out_encrypted_path = NULL;
+  *out_file_key = NULL;
+
+  if (snprintf(query, sizeof(query), "filepath=%s", logical_path) < 0 ||
+      strlen(query) >= sizeof(query)) {
+    return -1;
+  }
+
+  response = send_request_with_body(s, GET, "/files/contents", query, NONE,
+                                    NULL, 0);
+  if (!response) {
+    return -1;
+  }
+
+  if (response->status_code != 200) {
+    if (read_response_body(response, s->ssl, &body) == 0) {
+      print_error_response("read file", response, body);
+    }
+    goto cleanup;
+  }
+
+  if (strcmp(response->x_fek_scope, "owner") != 0) {
+    fprintf(stderr,
+            "read file failed: unsupported FEK scope '%s' for client decrypt\n",
+            response->x_fek_scope);
+    goto cleanup;
+  }
+
+  if (decode_hex_string(response->x_wrapped_fek, wrapped_key,
+                        sizeof(wrapped_key), &wrapped_key_len) != 0) {
+    fprintf(stderr, "read file failed: invalid wrapped FEK\n");
+    goto cleanup;
+  }
+
+  file_key = decrypt_wrapped_user_key(s->user_keys, (char*)wrapped_key);
+  if (!file_key) {
+    fprintf(stderr, "read file failed: unable to unwrap FEK\n");
+    goto cleanup;
+  }
+
+  fd = mkstemp(template);
+  if (fd < 0) {
+    goto cleanup;
+  }
+
+  if (response->content_length > 0) {
+    unsigned char* encrypted_bytes = calloc(response->content_length + 1, 1);
+    if (!encrypted_bytes) {
+      goto cleanup;
+    }
+
+    if (read_message_body(s->ssl, response, encrypted_bytes,
+                          response->content_length) !=
+        (ssize_t)response->content_length) {
+      free(encrypted_bytes);
+      goto cleanup;
+    }
+
+    if (write(fd, encrypted_bytes, response->content_length) !=
+        (ssize_t)response->content_length) {
+      free(encrypted_bytes);
+      goto cleanup;
+    }
+
+    free(encrypted_bytes);
+  }
+
+  close(fd);
+  fd = -1;
+  encrypted_path = strdup(template);
+  if (!encrypted_path) {
+    goto cleanup;
+  }
+
+  *out_encrypted_path = encrypted_path;
+  *out_file_key = file_key;
+  rc = 0;
+
+cleanup:
+  if (fd >= 0) {
+    close(fd);
+    unlink(template);
+  }
+  if (rc != 0) {
+    free(file_key);
+    free(encrypted_path);
+  }
+  free(body);
+  destroy_message(response);
+  return rc;
+}
+
+void read_file(char* pwd, char* filename, Session* s) {
+  char logical_path[512];
+  char* encrypted_path = NULL;
+  char* decrypted_path = NULL;
+  char* file_key = NULL;
+  char cmd[512];
+
+  if (join_logical_path(pwd, filename, logical_path, sizeof(logical_path)) !=
+      0) {
+    fprintf(stderr, "read file failed: invalid path\n");
+    return;
+  }
+
+  if (download_encrypted_file(s, logical_path, &encrypted_path, &file_key) !=
+      0) {
+    return;
+  }
+
+  decrypted_path = decrypt_file(file_key, encrypted_path);
+  if (!decrypted_path) {
+    fprintf(stderr, "read file failed: unable to decrypt file\n");
+    goto cleanup;
+  }
+
+  snprintf(cmd, sizeof(cmd), "vi -R %s", decrypted_path);
+  system(cmd);
+
+cleanup:
+  if (decrypted_path) {
+    unlink(decrypted_path);
+    free(decrypted_path);
+  }
+  if (encrypted_path) {
+    unlink(encrypted_path);
+    free(encrypted_path);
+  }
+  free(file_key);
+}
+
+void write_file(char* pwd, char* filename, Session* s) {
+  char logical_path[512];
+  char* encrypted_path = NULL;
+  char* decrypted_path = NULL;
+  char* file_key = NULL;
+  char* updated_encrypted_path = NULL;
+  char cmd[512];
+
+  if (join_logical_path(pwd, filename, logical_path, sizeof(logical_path)) !=
+      0) {
+    fprintf(stderr, "write file failed: invalid path\n");
+    return;
+  }
+
+  if (download_encrypted_file(s, logical_path, &encrypted_path, &file_key) !=
+      0) {
+    return;
+  }
+
+  decrypted_path = decrypt_file(file_key, encrypted_path);
+  if (!decrypted_path) {
+    fprintf(stderr, "write file failed: unable to decrypt file\n");
+    goto cleanup;
+  }
+
+  snprintf(cmd, sizeof(cmd), "vi %s", decrypted_path);
+  system(cmd);
+
+  updated_encrypted_path = encrypt_file(file_key, decrypted_path);
+  if (!updated_encrypted_path) {
+    fprintf(stderr, "write file failed: unable to encrypt updated file\n");
+    goto cleanup;
+  }
+
+  if (upload_encrypted_file(s, logical_path, updated_encrypted_path) != 0) {
+    goto cleanup;
+  }
+
+cleanup:
+  if (updated_encrypted_path) {
+    unlink(updated_encrypted_path);
+    free(updated_encrypted_path);
+  }
+  if (decrypted_path) {
+    unlink(decrypted_path);
+    free(decrypted_path);
+  }
+  if (encrypted_path) {
+    unlink(encrypted_path);
+    free(encrypted_path);
+  }
+  free(file_key);
+}
+
+void create_file(char* filepath, char* filename, Session* s) {
+  char template[] = "/tmp/sfs_create_XXXXXX";
+  char logical_path[512];
+  char* file_key = NULL;
+  char* encrypted_file = NULL;
+  char* wrapped = NULL;
+  http_message_t* response = NULL;
+  cJSON* json = NULL;
+  char* request_body = NULL;
+  char* response_body = NULL;
+  char wrapped_owner_hex[HTTP_MAX_HEADER_VALUE];
+  int fd = -1;
+  char cmd[512];
+
+  if (join_logical_path(filepath, filename, logical_path, sizeof(logical_path)) !=
+      0) {
+    fprintf(stderr, "create file failed: invalid path\n");
+    return;
+  }
+
+  fd = mkstemp(template);
+  if (fd < 0) {
+    perror("mkstemp");
+    return;
+  }
+  close(fd);
+
+  snprintf(cmd, sizeof(cmd), "vi %s", template);
+  system(cmd);
+
+  file_key = generate_file_key();
+  encrypted_file = encrypt_file(file_key, template);
+  wrapped = encrypt_wrapped_user_key(s->user_keys, file_key);
+  unlink(template);
+
+  if (!file_key || !encrypted_file || !wrapped ||
+      encode_hex_string((const unsigned char*)wrapped,
+                        (size_t)WRAPPED_USER_KEY_SIZE, wrapped_owner_hex,
+                        sizeof(wrapped_owner_hex)) != 0) {
+    fprintf(stderr, "create file failed: unable to prepare encrypted file\n");
+    goto cleanup;
+  }
+
+  json = cJSON_CreateObject();
+  if (!json) {
+    goto cleanup;
+  }
+  cJSON_AddStringToObject(json, "filepath", logical_path);
+  cJSON_AddStringToObject(json, "wrapped_fek_owner", wrapped_owner_hex);
+  request_body = cJSON_PrintUnformatted(json);
+  cJSON_Delete(json);
+  json = NULL;
+  if (!request_body) {
+    goto cleanup;
+  }
+
+  response = send_request_with_body(s, POST, "/files", NULL, JSON,
+                                    request_body, strlen(request_body));
+  if (!response) {
+    fprintf(stderr, "create file failed: no response\n");
+    goto cleanup;
+  }
+
+  if (read_response_body(response, s->ssl, &response_body) != 0) {
+    goto cleanup;
+  }
+
+  if (response->status_code != 201) {
+    print_error_response("create file", response, response_body);
+    goto cleanup;
+  }
+
+  destroy_message(response);
+  response = NULL;
+  free(response_body);
+  response_body = NULL;
+
+  if (upload_encrypted_file(s, logical_path, encrypted_file) != 0) {
+    goto cleanup;
+  }
+
+cleanup:
+  if (fd >= 0) {
+    unlink(template);
+  }
+  if (response) {
+    destroy_message(response);
+  }
+  if (json) {
+    cJSON_Delete(json);
+  }
+  free(request_body);
+  free(response_body);
+  free(wrapped);
+  free(file_key);
+  if (encrypted_file) {
+    unlink(encrypted_file);
+    free(encrypted_file);
+  }
+}
+
+void delete_file(char* filepath, char* filename, Session* s) {
+  char logical_path[512];
+  char query[HTTP_MAX_QUERY_LEN];
+  http_message_t* response = NULL;
+  char* body = NULL;
+
+  if (join_logical_path(filepath, filename, logical_path, sizeof(logical_path)) !=
+      0) {
+    fprintf(stderr, "delete file failed: invalid path\n");
+    return;
+  }
+
+  if (snprintf(query, sizeof(query), "filepath=%s", logical_path) < 0 ||
+      strlen(query) >= sizeof(query)) {
+    fprintf(stderr, "delete file failed: invalid query\n");
+    return;
+  }
+
+  response = send_request_with_body(s, DELETE, "/files", query, NONE, NULL, 0);
+  if (!response) {
+    fprintf(stderr, "delete file failed: no response\n");
+    return;
+  }
+
+  if (read_response_body(response, s->ssl, &body) != 0) {
+    destroy_message(response);
+    return;
+  }
+
+  if (response->status_code != 200) {
+    print_error_response("delete file", response, body);
+  }
+
+  free(body);
+  destroy_message(response);
 }
