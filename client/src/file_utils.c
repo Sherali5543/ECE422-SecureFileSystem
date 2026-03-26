@@ -4,7 +4,7 @@
 #include "tls.h"
 #include "cjson/cJSON.h"
 
-#include "client.c"
+#include "client.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
