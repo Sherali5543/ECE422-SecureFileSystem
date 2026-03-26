@@ -37,6 +37,9 @@ void test_read_message_contents(http_message_t* msg) {
   printf("content_length = %zu\n", msg->content_length);
   printf("connection = [%s]\n", msg->connection);
   printf("auth = [%s]\n", msg->auth_token);
+  printf("signature = [%s]\n", msg->x_signature);
+  printf("timestamp = [%ld]\n", msg->x_timestamp);
+  printf("has timestamp = [%d]\n", msg->has_x_timestamp);
   printf("Status code = %d\n", msg->status_code);
 }
 

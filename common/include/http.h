@@ -1,5 +1,6 @@
 #ifndef HTTP_H
 #define HTTP_H
+#include <stdbool.h>
 #include <sys/types.h>
 
 #include "llhttp.h"
@@ -48,6 +49,9 @@ typedef struct {
   size_t content_length;
   char connection[HTTP_MAX_HEADER_VALUE];
   char auth_token[HTTP_MAX_TOKEN_LEN];
+  char x_signature[HTTP_MAX_HEADER_VALUE]; 
+  time_t x_timestamp;  
+  bool has_x_timestamp;
 } http_message_t;
 
 typedef enum {
