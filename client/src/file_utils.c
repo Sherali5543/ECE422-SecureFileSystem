@@ -10,6 +10,21 @@
 #include <string.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+
+static int hex_value(char c) {
+  if (c >= '0' && c <= '9') {
+    return c - '0';
+  }
+  if (c >= 'a' && c <= 'f') {
+    return 10 + (c - 'a');
+  }
+  if (c >= 'A' && c <= 'F') {
+    return 10 + (c - 'A');
+  }
+  return -1;
+}
 
 static int decode_hex_string(const char* hex, unsigned char* out,
                              size_t out_cap, size_t* out_len) {
@@ -93,6 +108,8 @@ void read_file(char* pwd, char* filename, Session* s){
 
     strncpy(msg->path, request_endpoint, HTTP_MAX_PATH_LEN);
 
+    memcpy(msg->auth_token, s->token, sizeof(msg->auth_token));
+
     send_request(s->ssl, msg);
     tls_write(s->ssl, NULL, 0);
     destroy_message(msg);
@@ -100,13 +117,19 @@ void read_file(char* pwd, char* filename, Session* s){
     //get back request
     msg = read_response(s->ssl);
    
-    char wrapped_key[4096];
+    char* wrapped_key = malloc(4096);
 
     size_t outlen;
     
-    decode_hex_string(msg->x_wrapped_fek, wrapped_key, 4096, &outlen);
+    decode_hex_string(msg->x_wrapped_fek,  (unsigned char *) wrapped_key, 4096, &outlen);
 
-    char* file_key = decrypt_wrapped_user_key(s->user_keys, &wrapped_key);
+    // ACCESS_TYPE at;
+    // if (strcmp()){
+
+    // }
+
+
+    char* file_key = decrypt_wrapped_user_key(s->user_keys, wrapped_key);
 
 
     // create temp file and open it with the contents of the file
@@ -164,6 +187,7 @@ void write_file(char* pwd, char* filename, Session* s){
     // ask server for file
     http_message_t* msg = init_request();
     msg->method = GET;
+    memcpy(msg->auth_token, s->token, sizeof(msg->auth_token));
 
     char request_endpoint[512];
     snprintf(request_endpoint, sizeof(request_endpoint), 
@@ -178,11 +202,11 @@ void write_file(char* pwd, char* filename, Session* s){
     //get back request
     msg = read_response(s->ssl);
    
-    char wrapped_key[4096];
+    char* wrapped_key = malloc(4096);
 
     size_t outlen;
     
-    decode_hex_string(msg->x_wrapped_fek, wrapped_key, 4096, &outlen);
+    decode_hex_string(msg->x_wrapped_fek, (unsigned char *) wrapped_key, 4096, &outlen);
 
     // ACCESS_TYPE at;
     // if (strcmp()){
@@ -190,7 +214,7 @@ void write_file(char* pwd, char* filename, Session* s){
     // }
 
 
-    char* file_key = decrypt_wrapped_user_key(s->user_keys, &wrapped_key);
+    char* file_key = decrypt_wrapped_user_key(s->user_keys, wrapped_key);
 
 
     // create temp file and open it with the contents of the file
@@ -215,6 +239,7 @@ void write_file(char* pwd, char* filename, Session* s){
     // send updated file to server
     http_message_t* final_msg = init_request();
     final_msg->method = PUT;
+    memcpy(final_msg->auth_token, s->token, sizeof(final_msg->auth_token));
 
     char f_request_endpoint[512];
     snprintf(f_request_endpoint, sizeof(f_request_endpoint), 
@@ -222,8 +247,31 @@ void write_file(char* pwd, char* filename, Session* s){
 
     strncpy(final_msg->path, f_request_endpoint, HTTP_MAX_PATH_LEN);
 
+    fd = open(e_filepath, O_RDONLY);
+
+    struct stat st;
+
+    fstat(fd, &st);
+
+    final_msg->content_type = STREAM;
+    final_msg->content_length = (size_t)st.st_size;
+
     send_request(s->ssl, final_msg);
-    tls_write(s->ssl, NULL, 0);
+    
+    char buf[1024];
+    while (1) {
+        ssize_t n = read(fd, buf, sizeof(buf));
+        if (n < 0) {
+        break;
+        }
+        if (n == 0) {
+        break;
+        }
+        if (tls_write(s->ssl, buf, (size_t)n) != n) {
+        break;
+        }
+    }
+
     destroy_message(final_msg);
 }
 
@@ -254,7 +302,7 @@ void create_file(char* filepath, char* filename, Session* s){
     wrapped = encrypt_wrapped_user_key(s->user_keys, file_key);
 
     char w_enc[4096];
-    encode_hex_string(wrapped, WRAPPED_USER_KEY_SIZE, w_enc, sizeof(w_enc));
+    encode_hex_string((const unsigned char *) wrapped, (size_t) WRAPPED_USER_KEY_SIZE, w_enc, sizeof(w_enc));
 
     // char* hash = generate_file_hash(encrypted_file);
 
@@ -265,6 +313,7 @@ void create_file(char* filepath, char* filename, Session* s){
     // send to server
     http_message_t* msg = init_request();
     msg->method = POST;
+    memcpy(msg->auth_token, s->token, sizeof(msg->auth_token));
     strncpy(msg->path, "/files", HTTP_MAX_PATH_LEN);
     msg->content_type = JSON;
     cJSON* json = cJSON_CreateObject();
