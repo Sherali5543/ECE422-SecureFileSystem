@@ -164,6 +164,185 @@ Common error cases:
 - `403 Forbidden` if the user does not have delete permission
 - `404 Not Found` if the file does not exist
 
+### Create Directory
+
+Create a directory entry in metadata and create the backing directory on disk.
+
+- Method: `POST`
+- Path: `/directories`
+- Content-Type: `application/json`
+
+Request body:
+
+```json
+{
+  "dirpath": "/home/alice/docs/projects"
+}
+```
+
+The handler also accepts `filepath` instead of `dirpath`, but `dirpath` is clearer for the client.
+
+Success response:
+
+- Status: `201 Created`
+- Body:
+
+```json
+{
+  "message": "directory created",
+  "dirpath": "/home/alice/docs/projects",
+  "directory_id": 17
+}
+```
+
+Common error cases:
+
+- `400 Bad Request` for missing or invalid `dirpath`
+- `401 Unauthorized` for missing or bad token
+- `403 Forbidden` if the user cannot create inside the parent directory
+- `404 Not Found` if the parent directory does not exist
+- `409 Conflict` if the destination path already exists
+
+Example:
+
+```bash
+curl -k -X POST https://localhost:8443/directories \
+  -H "Authorization: Bearer test-token-alice-123" \
+  -H "Content-Type: application/json" \
+  -d '{"dirpath":"/home/alice/docs/projects"}'
+```
+
+### List Directory Contents
+
+List the direct children of a directory.
+
+- Method: `GET`
+- Path: `/files`
+- Query: `filepath=/absolute/directory/path`
+
+Example request:
+
+```bash
+curl -k "https://localhost:8443/files?filepath=/home/alice/docs" \
+  -H "Authorization: Bearer test-token-alice-123"
+```
+
+Success response:
+
+- Status: `200 OK`
+- Body:
+
+```json
+{
+  "directory": "/home/alice/docs",
+  "entries": [
+    {
+      "path": "/home/alice/docs/a.txt",
+      "name": "a.txt",
+      "object_type": "file",
+      "owner_id": 1,
+      "group_id": null,
+      "mode_bits": 416,
+      "created_at": 1774488154,
+      "updated_at": 1774488154
+    }
+  ]
+}
+```
+
+Common error cases:
+
+- `400 Bad Request` for missing or invalid `filepath`
+- `401 Unauthorized` for missing or bad token
+- `403 Forbidden` if the user does not have directory read access
+- `404 Not Found` if the directory does not exist
+
+### Move Or Rename A Path
+
+Move or rename a file or directory.
+
+- Method: `POST`
+- Path: `/files/move`
+- Content-Type: `application/json`
+
+Request body:
+
+```json
+{
+  "source_filepath": "/home/alice/docs/a.txt",
+  "destination_filepath": "/home/alice/docs/archive/a.txt"
+}
+```
+
+Success response:
+
+- Status: `200 OK`
+- Body:
+
+```json
+{
+  "message": "path moved",
+  "from": "/home/alice/docs/a.txt",
+  "to": "/home/alice/docs/archive/a.txt"
+}
+```
+
+Common error cases:
+
+- `400 Bad Request` for an invalid move request or moving a directory into itself
+- `401 Unauthorized` for missing or bad token
+- `403 Forbidden` if the user cannot move the source or cannot create in the destination parent
+- `404 Not Found` if the source or destination parent does not exist
+- `409 Conflict` if the destination path already exists
+
+Example:
+
+```bash
+curl -k -X POST https://localhost:8443/files/move \
+  -H "Authorization: Bearer test-token-alice-123" \
+  -H "Content-Type: application/json" \
+  -d '{"source_filepath":"/home/alice/docs/a.txt","destination_filepath":"/home/alice/docs/archive/a.txt"}'
+```
+
+### Update Permissions
+
+Update the stored Unix-style mode bits for a file or directory.
+
+- Method: `PATCH`
+- Path: `/files/permissions`
+- Content-Type: `application/json`
+
+Request body:
+
+```json
+{
+  "filepath": "/home/alice/docs/a.txt",
+  "mode_bits": "0644"
+}
+```
+
+`mode_bits` can be sent as an octal-style string like `"0644"` or as a numeric value like `420`.
+
+Success response:
+
+- Status: `200 OK`
+- Body:
+
+```json
+{
+  "message": "permissions updated",
+  "filepath": "/home/alice/docs/a.txt",
+  "mode_bits": 420
+}
+```
+
+Common error cases:
+
+- `400 Bad Request` for missing or invalid `filepath` or `mode_bits`
+- `401 Unauthorized` for missing or bad token
+- `403 Forbidden` if the caller is not the owner
+- `404 Not Found` if the path does not exist
+
 ## Group Actions
 
 ### Create Group
@@ -345,10 +524,6 @@ These routes are still placeholders or not wired up yet:
 - `POST /auth/login`
 - `POST /auth/register`
 - `POST /auth/logout`
-- `GET /files` for listing files/directories
-- `POST /directories`
-- `POST /files/move`
-- `PATCH /files/permissions`
 
 ## Suggested Client Wrapper Shape
 
