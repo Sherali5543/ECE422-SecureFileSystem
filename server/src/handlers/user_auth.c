@@ -286,6 +286,34 @@ static int parse_register_request(http_message_t* msg, SSL* ssl,
   return 0;
 }
 
+static int parse_username_query(const http_message_t* msg, char* out_username,
+                                size_t out_size) {
+  static const char prefix[] = "username=";
+  const char* value = NULL;
+  size_t len = 0;
+
+  if (!msg || !out_username || out_size == 0) {
+    return -1;
+  }
+  if (strncmp(msg->query, prefix, sizeof(prefix) - 1) != 0) {
+    return -1;
+  }
+
+  value = msg->query + sizeof(prefix) - 1;
+  if (*value == '\0' || strchr(value, '&') != NULL) {
+    return -1;
+  }
+
+  len = strlen(value);
+  if (len >= out_size) {
+    return -1;
+  }
+
+  memcpy(out_username, value, len);
+  out_username[len] = '\0';
+  return 0;
+}
+
 static void clear_pending_login(server_context_t* ctx) {
   if (!ctx) {
     return;
@@ -586,4 +614,89 @@ void register_user(http_message_t* msg, SSL* ssl, http_message_t* response,
   send_response(ssl, response);
   write_json_body(ssl, json);
   cleanup_register_request(&req);
+}
+
+void get_user_keys(http_message_t* msg, SSL* ssl, http_message_t* response,
+                   server_context_t* ctx) {
+  db_user_t requester;
+  db_user_t target;
+  char username[DB_USERNAME_MAX];
+  char public_encryption_key_hex[DB_PUBLIC_ENCRYPTION_KEY_MAX * 2 + 1];
+  char public_signing_key_hex[DB_PUBLIC_SIGNING_KEY_MAX * 2 + 1];
+  char json[4096];
+  int written = 0;
+  int rc = 0;
+
+  if (!msg || !ssl || !response || !ctx) {
+    return;
+  }
+
+  if (msg->auth_token[0] == '\0') {
+    send_json_error(ssl, response, 401, "Unauthorized",
+                    "{\"error\":\"missing bearer token\"}");
+    return;
+  }
+
+  requester.id = 0;
+  for (size_t i = 0; i < SERVER_MAX_SESSIONS; i++) {
+    server_session_t* session = &ctx->sessions[i];
+
+    if (!session->in_use) {
+      continue;
+    }
+    if (strncmp(session->token, msg->auth_token, SERVER_MAX_TOKEN_LEN) != 0) {
+      continue;
+    }
+    requester.id = session->user_id;
+    break;
+  }
+
+  if (requester.id == 0) {
+    send_json_error(ssl, response, 401, "Unauthorized",
+                    "{\"error\":\"invalid or expired token\"}");
+    return;
+  }
+
+  if (parse_username_query(msg, username, sizeof(username)) != 0) {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"invalid username query\"}");
+    return;
+  }
+
+  rc = db_find_user_by_username(ctx, username, &target);
+  if (rc < 0) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to query user\"}");
+    return;
+  }
+  if (rc == 0) {
+    send_json_error(ssl, response, 404, "Not Found",
+                    "{\"error\":\"unknown user\"}");
+    return;
+  }
+
+  if (hex_encode(target.public_encryption_key, target.public_encryption_key_len,
+                 public_encryption_key_hex,
+                 sizeof(public_encryption_key_hex)) != 0 ||
+      hex_encode(target.public_signing_key, target.public_signing_key_len,
+                 public_signing_key_hex, sizeof(public_signing_key_hex)) != 0) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to encode user keys\"}");
+    return;
+  }
+
+  written = snprintf(
+      json, sizeof(json),
+      "{\"username\":\"%s\",\"public_encryption_key\":\"%s\","
+      "\"public_signing_key\":\"%s\"}",
+      target.username, public_encryption_key_hex, public_signing_key_hex);
+  if (written < 0 || (size_t)written >= sizeof(json)) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to build user key response\"}");
+    return;
+  }
+
+  set_json_response(response, 200, "OK", (size_t)written);
+  send_response(ssl, response);
+  write_json_body(ssl, json);
 }

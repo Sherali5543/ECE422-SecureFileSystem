@@ -9,6 +9,8 @@ void register_user(http_message_t* msg, SSL* ssl, http_message_t* response,
                    server_context_t* ctx);
 void logout_user(http_message_t* msg, SSL* ssl, http_message_t* response,
                  server_context_t* ctx);
+void get_user_keys(http_message_t* msg, SSL* ssl, http_message_t* response,
+                   server_context_t* ctx);
 
 void create_file(http_message_t* msg, SSL* ssl, http_message_t* response,
                  server_context_t* ctx);

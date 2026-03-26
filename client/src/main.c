@@ -1,14 +1,22 @@
 #include "session.h"
 #include "cli_utils.h"
 #include "client.h"
+#include <sodium.h>
 
 int main(void){
   char* action = NULL;
   SSL_CTX* ctx = setup_client();
   SSL* ssl = connect_to_server(ctx);
 
+  if (sodium_init() < 0) {
+    fprintf(stderr, "Failed to initialize libsodium\n");
+    disconnect_server(ssl, ctx);
+    return EXIT_FAILURE;
+  }
+
   while (1) {
     Session session;
+    memset(&session, 0, sizeof(session));
 
     printf("\n=== Main Menu ===\n");
     printf("login\n");

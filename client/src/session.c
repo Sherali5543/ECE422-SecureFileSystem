@@ -396,6 +396,7 @@ Session login(SSL* ssl) {
     return s;
   }
   SignKeys* sign_keys = NULL;
+  UserKeys* user_keys = NULL;
   char* challenge_hex = NULL;
   unsigned char challenge[crypto_sign_BYTES];
   size_t challenge_len = 0;
@@ -422,17 +423,27 @@ Session login(SSL* ssl) {
   free(challenge_hex);
 
   sign_keys = generate_signing_keypair(username, pwd);
-  free(pwd);
   if (!sign_keys) {
     fprintf(stderr, "Failed to derive signing keys\n");
+    free(pwd);
+    free(username);
+    return s;
+  }
+
+  user_keys = generate_read_keypair(username, pwd);
+  free(pwd);
+  if (!user_keys) {
+    fprintf(stderr, "Failed to derive encryption keys\n");
+    free(sign_keys);
     free(username);
     return s;
   }
 
   signed_challenge = generate_bytes_signature(challenge, challenge_len, sign_keys);
-  free(sign_keys);
   if (!signed_challenge) {
     fprintf(stderr, "Failed to sign login challenge\n");
+    free(user_keys);
+    free(sign_keys);
     free(username);
     return s;
   }
@@ -442,6 +453,8 @@ Session login(SSL* ssl) {
                  sizeof(signature_hex)) != 0) {
     fprintf(stderr, "Failed to encode login signature\n");
     free(signed_challenge);
+    free(user_keys);
+    free(sign_keys);
     free(username);
     return s;
   }
@@ -450,6 +463,8 @@ Session login(SSL* ssl) {
   s.token = submit_login_signature(ssl, username, signature_hex);
   if (!s.token) {
     fprintf(stderr, "Login failed\n");
+    free(user_keys);
+    free(sign_keys);
     free(username);
     memset(&s, 0, sizeof(s));
     return s;
@@ -457,6 +472,9 @@ Session login(SSL* ssl) {
 
   s.id = 0;
   s.username = username;
+  s.user_keys = user_keys;
+  s.sign_keys = sign_keys;
+  snprintf(s.cwd, sizeof(s.cwd), "/home/%s", username);
   printf("Login successful. Session token: %s\n", s.token);
   return s;
 }
@@ -467,6 +485,10 @@ void destroy_session(Session* s) {
   }
   free(s->username);
   free(s->token);
+  free(s->user_keys);
+  free(s->sign_keys);
   s->username = NULL;
   s->token = NULL;
+  s->user_keys = NULL;
+  s->sign_keys = NULL;
 }

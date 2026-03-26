@@ -580,9 +580,46 @@ Common error cases:
 - `401 Unauthorized` for missing or bad token
 - `404 Not Found` if the target user does not exist
 
-## Not Implemented Yet
+### Get User Public Keys
 
-These routes are still placeholders or not wired up yet:
+Return the stored public encryption and signing keys for a specific user.
+
+- Method: `GET`
+- Path: `/users/keys`
+- Query: `username=<username>`
+
+This route is mainly useful for client-side sharing flows such as wrapping a
+group key for another user before calling `POST /groups/members`.
+
+Example request:
+
+```bash
+curl -k "https://localhost:8443/users/keys?username=bob" \
+  -H "Authorization: Bearer test-token-alice-123"
+```
+
+Success response:
+
+- Status: `200 OK`
+- Body:
+
+```json
+{
+  "username": "bob",
+  "public_encryption_key": "<hex>",
+  "public_signing_key": "<hex>"
+}
+```
+
+Common error cases:
+
+- `400 Bad Request` for an invalid `username` query
+- `401 Unauthorized` for missing or bad token
+- `404 Not Found` if the target user does not exist
+
+## Auth Routes
+
+The client also uses these routes through the login and registration flow:
 
 - `POST /auth/login`
 - `POST /auth/register`
@@ -592,12 +629,16 @@ These routes are still placeholders or not wired up yet:
 
 If you want a thin client wrapper layer, these are the core actions it should expose:
 
+- `login(username, password)`
+- `register(username, password)`
+- `logout()`
 - `create_file(filepath, wrapped_fek_owner, group_name=None, wrapped_fek_group=None, wrapped_fek_other=None)`
 - `write_file(filepath, bytes)`
 - `read_file(filepath)`
 - `delete_file(filepath)`
 - `create_group(group_name, wrapped_group_key)`
 - `get_group_key(group_name)`
+- `get_user_keys(username)`
 - `add_group_member(group_name, username, wrapped_group_key)`
 - `remove_group_member(group_name, username)`
 - `list_user_groups(username=None)`
