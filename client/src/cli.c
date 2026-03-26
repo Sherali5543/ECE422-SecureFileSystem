@@ -921,6 +921,47 @@ cleanup:
     return rc;
 }
 
+static int fetch_storage_presence_for_path(SSL* ssl, Session* session,
+                                           const char* path,
+                                           int* out_storage_present) {
+    client_response_t response = {0};
+    cJSON* json = NULL;
+    cJSON* storage_present_json = NULL;
+    int rc = -1;
+
+    if (ssl == NULL || session == NULL || path == NULL ||
+        out_storage_present == NULL) {
+        return -1;
+    }
+
+    *out_storage_present = 0;
+    if (fetch_metadata_for_path(ssl, session, path, &response) != 0) {
+        return -1;
+    }
+    if (response.msg->status_code != 200) {
+        goto cleanup;
+    }
+
+    json = cJSON_Parse((char*)response.body);
+    if (json == NULL) {
+        goto cleanup;
+    }
+
+    storage_present_json =
+        cJSON_GetObjectItemCaseSensitive(json, "storage_present");
+    if (!cJSON_IsBool(storage_present_json)) {
+        goto cleanup;
+    }
+
+    *out_storage_present = cJSON_IsTrue(storage_present_json);
+    rc = 0;
+
+cleanup:
+    cJSON_Delete(json);
+    cleanup_response(&response);
+    return rc;
+}
+
 static int load_group_key(SSL* ssl, Session* session, const char* group_name,
                           unsigned char* out_key) {
     client_response_t response = {0};
@@ -1182,6 +1223,7 @@ static int scan_directory_integrity(SSL* ssl, Session* session,
     char encrypted_path[SESSION_PATH_MAX * 3];
     char query[HTTP_MAX_QUERY_LEN];
     unsigned char dir_key[crypto_secretbox_KEYBYTES];
+    int directory_storage_present = 0;
     int rc = -1;
 
     if (ssl == NULL || session == NULL || path == NULL || report == NULL) {
@@ -1192,6 +1234,15 @@ static int scan_directory_integrity(SSL* ssl, Session* session,
                              sizeof(encrypted_path)) != 0 ||
         resolve_directory_name_key(ssl, session, path, dir_key, NULL) != 0) {
         report->scan_errors++;
+        return -1;
+    }
+    if (fetch_storage_presence_for_path(ssl, session, path,
+                                        &directory_storage_present) != 0) {
+        report->scan_errors++;
+        return -1;
+    }
+    if (!directory_storage_present) {
+        report->corrupted_names++;
         return -1;
     }
 
@@ -1221,6 +1272,8 @@ static int scan_directory_integrity(SSL* ssl, Session* session,
         cJSON* type_json = cJSON_GetObjectItemCaseSensitive(item, "object_type");
         cJSON* owner_id_json = cJSON_GetObjectItemCaseSensitive(item, "owner_id");
         cJSON* group_id_json = cJSON_GetObjectItemCaseSensitive(item, "group_id");
+        cJSON* storage_present_json =
+            cJSON_GetObjectItemCaseSensitive(item, "storage_present");
         char* decrypted_name = NULL;
         char child_path[SESSION_PATH_MAX];
 
@@ -1240,6 +1293,12 @@ static int scan_directory_integrity(SSL* ssl, Session* session,
                              sizeof(child_path)) != 0) {
             free(decrypted_name);
             report->scan_errors++;
+            continue;
+        }
+        if (cJSON_IsBool(storage_present_json) &&
+            !cJSON_IsTrue(storage_present_json)) {
+            report->corrupted_names++;
+            free(decrypted_name);
             continue;
         }
 

@@ -194,6 +194,27 @@ static int create_directory_ctx(server_context_t* ctx, const char* dirpath) {
   return 0;
 }
 
+static int storage_path_exists(server_context_t* ctx, const char* filepath,
+                               int* out_exists) {
+  char fullpath[STORAGE_PATH_MAX];
+  struct stat st;
+
+  if (!ctx || !filepath || !out_exists) {
+    return -1;
+  }
+
+  *out_exists = 0;
+  if (build_storage_path(ctx, filepath, fullpath, sizeof(fullpath)) != 0) {
+    return -1;
+  }
+
+  if (stat(fullpath, &st) == 0) {
+    *out_exists = 1;
+  }
+
+  return 0;
+}
+
 static int rename_storage_path(server_context_t* ctx, const char* old_path,
                                const char* new_path) {
   char old_fullpath[STORAGE_PATH_MAX];
@@ -1404,16 +1425,21 @@ static int finalize_move_transaction(server_context_t* ctx, const char* old_path
   return 0;
 }
 
-static int append_entry_json(cJSON* entries, const db_file_metadata_t* meta) {
+static int append_entry_json(server_context_t* ctx, cJSON* entries,
+                             const db_file_metadata_t* meta) {
   cJSON* item = NULL;
   char path[DB_FILE_PATH_MAX];
   char name[DB_FILE_NAME_MAX];
+  int storage_present = 0;
 
-  if (!entries || !meta) {
+  if (!ctx || !entries || !meta) {
     return -1;
   }
   if (blob_to_cstring(meta->path, meta->path_len, path, sizeof(path)) != 0 ||
       blob_to_cstring(meta->name, meta->name_len, name, sizeof(name)) != 0) {
+    return -1;
+  }
+  if (storage_path_exists(ctx, path, &storage_present) != 0) {
     return -1;
   }
 
@@ -1434,6 +1460,7 @@ static int append_entry_json(cJSON* entries, const db_file_metadata_t* meta) {
   cJSON_AddNumberToObject(item, "mode_bits", meta->mode_bits);
   cJSON_AddNumberToObject(item, "created_at", (double)meta->created_at);
   cJSON_AddNumberToObject(item, "updated_at", (double)meta->updated_at);
+  cJSON_AddBoolToObject(item, "storage_present", storage_present);
   cJSON_AddItemToArray(entries, item);
   return 0;
 }
@@ -1774,7 +1801,7 @@ void get_files(http_message_t* msg, SSL* ssl, http_message_t* response,
   }
 
   for (size_t i = 0; i < child_count; i++) {
-    if (append_entry_json(entries, &children[i]) != 0) {
+    if (append_entry_json(ctx, entries, &children[i]) != 0) {
       send_json_error(ssl, response, 500, "Internal Server Error",
                       "{\"error\":\"response build failure\"}");
       goto cleanup;
@@ -1809,6 +1836,7 @@ void get_file_metadata(http_message_t* msg, SSL* ssl, http_message_t* response,
   char* json = NULL;
   char path[DB_FILE_PATH_MAX];
   char name[DB_FILE_NAME_MAX];
+  int storage_present = 0;
   int rc = 0;
 
   if (!msg || !ssl || !response || !ctx) {
@@ -1858,6 +1886,11 @@ void get_file_metadata(http_message_t* msg, SSL* ssl, http_message_t* response,
                     "{\"error\":\"failed to prepare metadata response\"}");
     return;
   }
+  if (storage_path_exists(ctx, path, &storage_present) != 0) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to prepare metadata response\"}");
+    return;
+  }
 
   root = cJSON_CreateObject();
   if (root == NULL) {
@@ -1878,6 +1911,7 @@ void get_file_metadata(http_message_t* msg, SSL* ssl, http_message_t* response,
   cJSON_AddNumberToObject(root, "mode_bits", meta.mode_bits);
   cJSON_AddNumberToObject(root, "created_at", (double)meta.created_at);
   cJSON_AddNumberToObject(root, "updated_at", (double)meta.updated_at);
+  cJSON_AddBoolToObject(root, "storage_present", storage_present);
 
   json = cJSON_PrintUnformatted(root);
   if (json == NULL) {

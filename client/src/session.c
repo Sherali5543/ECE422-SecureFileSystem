@@ -161,8 +161,16 @@ static char* request_login_challenge(SSL* ssl, const char* username) {
   free(request_body);
 
   response = read_response(ssl);
-  if (!response || response->status_code != 200 ||
+  if (!response) {
+    return NULL;
+  }
+  if (response->content_length > 0 &&
       read_response_body(response, ssl, &response_body) != 0) {
+    destroy_message(response);
+    return NULL;
+  }
+  if (response->status_code != 200) {
+    free(response_body);
     destroy_message(response);
     return NULL;
   }
@@ -220,8 +228,16 @@ static char* submit_login_signature(SSL* ssl, const char* username,
   free(request_body);
 
   response = read_response(ssl);
-  if (!response || response->status_code != 200 ||
+  if (!response) {
+    return NULL;
+  }
+  if (response->content_length > 0 &&
       read_response_body(response, ssl, &response_body) != 0) {
+    destroy_message(response);
+    return NULL;
+  }
+  if (response->status_code != 200) {
+    free(response_body);
     destroy_message(response);
     return NULL;
   }

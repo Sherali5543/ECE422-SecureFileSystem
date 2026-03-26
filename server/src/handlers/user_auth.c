@@ -1,9 +1,12 @@
 #include "handlers.h"
 
+#include <errno.h>
 #include <sodium.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <time.h>
 
 #include "cjson/cJSON.h"
 #include "db.h"
@@ -378,6 +381,76 @@ static int create_registration_home_directories(server_context_t* ctx,
   return 0;
 }
 
+static int build_storage_path(server_context_t* ctx, const char* filepath,
+                              char* out, size_t out_sz) {
+  int written = 0;
+
+  if (ctx == NULL || ctx->storage_root == NULL || filepath == NULL ||
+      out == NULL || out_sz == 0) {
+    return -1;
+  }
+
+  written = snprintf(out, out_sz, "%s%s", ctx->storage_root, filepath);
+  if (written < 0 || (size_t)written >= out_sz) {
+    return -1;
+  }
+
+  return 0;
+}
+
+static int ensure_directory_path(const char* fullpath) {
+  char tmp[DB_FILE_PATH_MAX * 2];
+  char* p = NULL;
+
+  if (fullpath == NULL || fullpath[0] == '\0') {
+    return -1;
+  }
+
+  strncpy(tmp, fullpath, sizeof(tmp) - 1);
+  tmp[sizeof(tmp) - 1] = '\0';
+
+  for (p = tmp + 1; *p != '\0'; p++) {
+    if (*p == '/') {
+      *p = '\0';
+      if (mkdir(tmp, 0755) != 0 && errno != EEXIST) {
+        return -1;
+      }
+      *p = '/';
+    }
+  }
+
+  if (mkdir(tmp, 0755) != 0 && errno != EEXIST) {
+    return -1;
+  }
+
+  return 0;
+}
+
+static int ensure_registration_storage_directories(server_context_t* ctx,
+                                                   const register_request_t* req) {
+  char home_storage_path[DB_FILE_PATH_MAX * 2];
+  char user_home_storage_path[DB_FILE_PATH_MAX * 2];
+
+  if (ctx == NULL || req == NULL || req->home_path == NULL ||
+      req->user_home_path == NULL) {
+    return -1;
+  }
+
+  if (build_storage_path(ctx, req->home_path, home_storage_path,
+                         sizeof(home_storage_path)) != 0 ||
+      build_storage_path(ctx, req->user_home_path, user_home_storage_path,
+                         sizeof(user_home_storage_path)) != 0) {
+    return -1;
+  }
+
+  if (ensure_directory_path(home_storage_path) != 0 ||
+      ensure_directory_path(user_home_storage_path) != 0) {
+    return -1;
+  }
+
+  return 0;
+}
+
 static int parse_username_query(const http_message_t* msg, char* out_username,
                                 size_t out_size) {
   static const char prefix[] = "username=";
@@ -691,6 +764,13 @@ void register_user(http_message_t* msg, SSL* ssl, http_message_t* response,
   if (create_registration_home_directories(ctx, &req, user_id) != 0) {
     send_json_error(ssl, response, 500, "Internal Server Error",
                     "{\"error\":\"failed to create encrypted home directories\"}");
+    cleanup_register_request(&req);
+    return;
+  }
+  if (ensure_registration_storage_directories(ctx, &req) != 0) {
+    send_json_error(
+        ssl, response, 500, "Internal Server Error",
+        "{\"error\":\"failed to create encrypted home storage directories\"}");
     cleanup_register_request(&req);
     return;
   }
