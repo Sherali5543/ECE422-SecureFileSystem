@@ -126,7 +126,7 @@ static int on_headers_complete(llhttp_t* parser) {
       default:
         data->msg->method = UNKNOWN;
         fprintf(stderr, "On method: unknown method\n");
-        return -1;
+        return HPE_INVALID_METHOD;
     }
   }
 
