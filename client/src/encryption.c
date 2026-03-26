@@ -7,6 +7,9 @@
 
 #define CHUNK_SIZE 1024
 
+const int WRAPPED_USER_KEY_SIZE = crypto_box_SEALBYTES + crypto_secretstream_xchacha20poly1305_KEYBYTES;
+const int WRAPPED_GROUP_KEY_SIZE = crypto_secretbox_MACBYTES + crypto_secretstream_xchacha20poly1305_KEYBYTES;
+
 UserKeys* generate_read_keypair(char* username, char* password){
     UserKeys* kp = malloc(sizeof(UserKeys));
 

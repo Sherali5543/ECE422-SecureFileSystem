@@ -84,21 +84,12 @@ http_message_t* request_metadata(char* filepath, Session* s){
 
 void read_file(char* pwd, char* filename, Session* s){
     // first check if we like the metadata
-    char filepath[512];
-    snprintf(filepath, sizeof(filepath), 
-        "%s/%s", pwd, filename);
-    
-    http_message_t* metadata = request_metadata(filepath, s);
-    // do some checks on metadata before contiuning
-    // need to determine the type of decryption we do
-
-    // ask server for file
     http_message_t* msg = init_request();
     msg->method = GET;
 
     char request_endpoint[512];
     snprintf(request_endpoint, sizeof(request_endpoint), 
-        "/files/content?path=%s/%s", pwd, filename);
+        "/files/contents?filepath=%s/%s", pwd, filename);
 
     strncpy(msg->path, request_endpoint, HTTP_MAX_PATH_LEN);
 
@@ -106,10 +97,34 @@ void read_file(char* pwd, char* filename, Session* s){
     tls_write(s->ssl, NULL, 0);
     destroy_message(msg);
     
-    // get back request which is the file as a stream
-
+    //get back request
     msg = read_response(s->ssl);
+   
+    char wrapped_key[4096];
+
+    size_t outlen;
+    
+    decode_hex_string(msg->x_wrapped_fek, wrapped_key, 4096, &outlen);
+
+    char* file_key = decrypt_wrapped_user_key(s->user_keys, &wrapped_key);
+
+
+    // create temp file and open it with the contents of the file
+    char* buffer = calloc(msg->content_length + 1, 1);
+    read_message_body(s->ssl, msg, buffer,msg->content_length);
+
+    char template[] = "/tmp/sfs_raw_XXXXXX";
+    int fd = mkstemp(template);
+    
+    write(fd, buffer, msg->content_length);
+    close(fd);
+
     // decrypt file
+    char* d_filepath = decrypt_file(file_key, template);
+
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "vi %s", d_filepath);
+    system(cmd);
     
     free(msg);
 
@@ -238,6 +253,9 @@ void create_file(char* filepath, char* filename, Session* s){
     char* wrapped = NULL;
     wrapped = encrypt_wrapped_user_key(s->user_keys, file_key);
 
+    char w_enc[4096];
+    encode_hex_string(wrapped, WRAPPED_USER_KEY_SIZE, w_enc, sizeof(w_enc));
+
     // char* hash = generate_file_hash(encrypted_file);
 
     // char* signature
@@ -255,7 +273,7 @@ void create_file(char* filepath, char* filename, Session* s){
     char fullpath[512];
     snprintf(fullpath, sizeof(fullpath), "%s/%s", filepath, filename);
     cJSON_AddStringToObject(json, "filepath", fullpath);
-    cJSON_AddStringToObject(json, "wrapped_fek_owner", wrapped);    
+    cJSON_AddStringToObject(json, "wrapped_fek_owner", w_enc);    
 
     char* body = cJSON_PrintUnformatted(json);
     msg->content_length = strlen(body);

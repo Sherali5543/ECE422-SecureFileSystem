@@ -5,6 +5,9 @@
 
 #include "common_encryption.h"
 
+extern const int WRAPPED_USER_KEY_SIZE;
+extern const int WRAPPED_GROUP_KEY_SIZE;
+
 typedef struct UserKeys {
     unsigned char public_key[crypto_box_PUBLICKEYBYTES];
     unsigned char secret_key[crypto_box_SECRETKEYBYTES];
