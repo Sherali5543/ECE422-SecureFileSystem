@@ -1,18 +1,19 @@
 #ifndef ENCRYPTION_H
 #define ENCRYPTION_H
 
+#include "common_encryption.h"
+
 typedef struct UserKeys UserKeys;
 
 typedef struct SignKeys SignKeys;
 
 // The user's pair is a public encrypt keypair, generated deterministically
-// using the user's username and password
+// using the user's username and plaintext password
 UserKeys* generate_read_keypair(char* username, char* password);
 
 // The user's pair is a public encrypt keypair, generated deterministically
-// using the user's username and password
+// using the user's username and plaintext password
 SignKeys* generate_signing_keypair(char* username, char* password);
-
 
 // The file key uses xchacha real smooth take it back now yall
 // to randomly generate a shared secret key
@@ -55,24 +56,21 @@ char* decrypt_file_group_key(char* group_key, char* encrypted_key);
 // generates a hash of the specified filepath
 char* generate_file_hash(char* filepath);
 
-// generates the signature of the specified files's hash by
-// encrypting with the user's signing keys
-char* generate_hash_signature(char* filepath, SignKeys* sign_keys);
-
-// decrypts the hash signature using the signer's public key
-// returns:
-// - the file's hash if legitimate
-// - nothing if signing failed
-char* decrypt_hash_signature(char* signature, char* signer_public_key);
-
+// generates the signature of the specified hash by encrypting
+// it with the user's signing keys
+char* generate_hash_signature(char* hash, SignKeys* sign_keys);
 
 // decrypts the specified file using the given file key
+//
+// returns the filepath to the encrypted temp file
 //
 // must call unlink(filepath); when done using the file to destroy it
 char* encrypt_file(char* file_key, char* filepath);
 
 
 // decrypts the specified file using the file_key
+//
+// returns the filepath to the decrypted temp file
 //
 // must call unlink(file_path) when done using the file to destroy it
 char* decrypt_file(char* file_key, char* filepath);

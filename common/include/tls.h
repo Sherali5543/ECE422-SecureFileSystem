@@ -1,3 +1,5 @@
+#ifndef SSL_H
+#define SSL_H
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
@@ -87,3 +89,4 @@ ssize_t tls_write(SSL* ssl, void* buf, size_t write_bytes);
  *
  */
 void tls_cleanup(SSL_CTX* ctx, BIO* bio);
+#endif

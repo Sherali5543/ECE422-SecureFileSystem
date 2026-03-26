@@ -3,6 +3,7 @@
 #include <sys/types.h>
 
 #include "llhttp.h"
+#include "tls.h"
 
 #define HTTP_MAX_METHOD_LEN 16
 #define HTTP_MAX_PATH_LEN 256
@@ -162,4 +163,60 @@ ssize_t http_build_header(const http_message_t* msg,
  *
  * BODY // Same as what client sent
  */
+
+/*
+ * @brief Allocate and set defaults for HTTP request 
+ *
+ * @return http_message_t * pointer to defaulted message
+ */
+http_message_t* init_request(void);
+
+/*
+ * @brief Allocate and set defaults for HTTP response 
+ *
+ * @return http_message_t * pointer to defaulted message
+ */
+http_message_t* init_response(void);
+
+/*
+ * @brief Deallocate and cleanup http message
+ *
+ * @param http_message_t * pointer to message to destroy
+ */
+void destroy_message(http_message_t* msg);
+
+/*
+ * @brief Blocking read and parse http headers for expected request 
+ *
+ * @param ssl Pointer to ssl connection
+ *
+ * @return http_message_t * pointer to message
+ */
+http_message_t* read_request(SSL* ssl);
+
+/*
+ * @brief Blocking read and parse http headers for expected response
+ *
+ * @param ssl Pointer to ssl connection
+ *
+ * @return http_message_t * pointer to message
+ */
+http_message_t* read_response(SSL* ssl);
+
+/*
+ * @brief Blocking send and http headers for response 
+ *
+ * @param ssl Pointer to ssl connection
+ * @param response Pointer to configured message
+ */
+void send_response(SSL* ssl, http_message_t* response);
+
+/*
+ * @brief Blocking send and http headers for request 
+ *
+ * @param ssl Pointer to ssl connection
+ * @param response Pointer to configured message
+ */
+void send_request(SSL* ssl, http_message_t* response);
+void test_read_message_contents(http_message_t *msg);
 #endif
