@@ -1,5 +1,6 @@
 #include "server_context.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -37,6 +38,17 @@ int server_context_init(server_context_t* ctx) {
       ctx->session_ttl_seconds = ttl;
     }
   }
+  // example session
+  ctx->sessions[0].in_use = 1;
+  ctx->sessions[0].user_id = 1;
+  strncpy(ctx->sessions[0].username, "alice",
+          sizeof(ctx->sessions[0].username) - 1);
+  strncpy(ctx->sessions[0].token, "test-token-alice-123",
+          sizeof(ctx->sessions[0].token) - 1);
+  ctx->sessions[0].expires_at = time(NULL) + 24 * 60 * 60;
+
+  printf("Loaded test session for user '%s' with token '%s'\n",
+         ctx->sessions[0].username, ctx->sessions[0].token);
 
   return 0;
 }
