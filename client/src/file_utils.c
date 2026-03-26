@@ -31,14 +31,23 @@ http_message_t* request_metadata(char* filepath, Session* s){
     return msg;
 }
 
-void read_file(char* filepath, char* filename, Session* s){
+void read_file(char* pwd, char* filename, Session* s){
+    // first check if we like the metadata
+    char filepath[512];
+    snprintf(filepath, sizeof(filepath), 
+        "%s/%s", pwd, filename);
+    
+    http_message_t* metadata = request_metadata(filepath, s);
+    // do some checks on metadata before contiuning
+    // need to determine the type of decryption we do
+
     // ask server for file
     http_message_t* msg = init_request();
     msg->method = GET;
 
     char request_endpoint[512];
     snprintf(request_endpoint, sizeof(request_endpoint), 
-        "/files/content?path=%s/%s", filepath, filename);
+        "/files/content?path=%s/%s", pwd, filename);
 
     strncpy(msg->path, request_endpoint, HTTP_MAX_PATH_LEN);
 
@@ -47,6 +56,7 @@ void read_file(char* filepath, char* filename, Session* s){
     destroy_message(msg);
     
     // get back request which is the file as a stream
+
     msg = read_response(s->ssl);
     // decrypt file
     
@@ -54,14 +64,23 @@ void read_file(char* filepath, char* filename, Session* s){
 
 }
 
-void write_file(char* filepath, char* filename, Session* s){
+void write_file(char* pwd, char* filename, Session* s){
+    // first check if we like the metadata
+    char filepath[512];
+    snprintf(filepath, sizeof(filepath), 
+        "%s/%s", pwd, filename);
+    
+    http_message_t* metadata = request_metadata(pwd, s);
+    // do some checks on metadata before contiuning
+    // need to determine the type of decryption we do
+
     // ask server for file
     http_message_t* msg = init_request();
     msg->method = GET;
 
     char request_endpoint[512];
     snprintf(request_endpoint, sizeof(request_endpoint), 
-        "/files/content?path=%s/%s", filepath, filename);
+        "/files/content?path=%s/%s", pwd, filename);
 
     strncpy(msg->path, request_endpoint, HTTP_MAX_PATH_LEN);
 
@@ -130,6 +149,8 @@ void create_file(char* filepath, char* filename, Session* s){
     char fullpath[512];
     snprintf(fullpath, sizeof(fullpath), "%s/%s", filepath, filename);
     cJSON_AddStringToObject(json, "path", fullpath);
+    cJSON_AddStringToObject(json, "wrapped_fek_owner", wrapped);
+    
 
     char* body = cJSON_PrintUnformatted(json);
     msg->content_length = strlen(body);
