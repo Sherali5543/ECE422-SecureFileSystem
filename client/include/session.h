@@ -5,6 +5,7 @@
 typedef struct{
     int id;
     char* username;
+    char* token;
 } Session;
 
 /**
@@ -14,6 +15,8 @@ typedef struct{
  * @return Session* 
  */
 Session login(SSL* ssl);
+int register_account(SSL* ssl);
+int logout(SSL* ssl, Session* session);
 
 /**
  * @brief Deallocates memory associated with a session

@@ -7,23 +7,19 @@
 
 #define CHUNK_SIZE 1024
 
-typedef struct UserKeys{
-    unsigned char public_key[crypto_box_PUBLICKEYBYTES];
-    unsigned char secret_key[crypto_box_SECRETKEYBYTES];
-} UserKeys;
-
-typedef struct SignKeys{
-    unsigned char public_key[crypto_sign_PUBLICKEYBYTES];
-    unsigned char secret_key[crypto_sign_SECRETKEYBYTES];
-} SignKeys;
-
 UserKeys* generate_read_keypair(char* username, char* password){
     UserKeys* kp = malloc(sizeof(UserKeys));
 
     size_t un_size = strlen(username);
     size_t pw_size = strlen(password);
     size_t seed_size = un_size + pw_size + 2;
-    char* seed = malloc(crypto_box_SEEDBYTES);
+    char* seed = calloc(crypto_box_SEEDBYTES, 1);
+
+    if (seed == NULL || seed_size > crypto_box_SEEDBYTES) {
+        free(seed);
+        free(kp);
+        return NULL;
+    }
 
     memcpy(seed, username, un_size);
     seed[un_size] = '.';
@@ -43,7 +39,13 @@ SignKeys* generate_signing_keypair(char* username, char* password){
     size_t un_size = strlen(username);
     size_t pw_size = strlen(password);
     size_t seed_size = un_size + pw_size + 2;
-    char* seed = malloc(crypto_sign_SEEDBYTES);
+    char* seed = calloc(crypto_sign_SEEDBYTES, 1);
+
+    if (seed == NULL || seed_size > crypto_sign_SEEDBYTES) {
+        free(seed);
+        free(kp);
+        return NULL;
+    }
 
     memcpy(seed, username, un_size);
     seed[un_size] = '.';
@@ -165,6 +167,30 @@ char* generate_hash_signature(char* hash, SignKeys* sign_keys){
     char* signature = malloc(crypto_sign_BYTES + crypto_generichash_BYTES);
 
     crypto_sign((unsigned char*) signature, NULL, (unsigned char *)hash, crypto_generichash_BYTES,(sign_keys->secret_key));
+
+    return signature;
+}
+
+char* generate_bytes_signature(const unsigned char* bytes, size_t len,
+                               SignKeys* sign_keys) {
+    unsigned long long signed_len = 0;
+    char* signature = NULL;
+
+    if (bytes == NULL || sign_keys == NULL) {
+        return NULL;
+    }
+
+    signature = malloc(crypto_sign_BYTES + len);
+    if (signature == NULL) {
+        return NULL;
+    }
+
+    if (crypto_sign((unsigned char*)signature, &signed_len, bytes,
+                    (unsigned long long)len, sign_keys->secret_key) != 0 ||
+        signed_len != crypto_sign_BYTES + len) {
+        free(signature);
+        return NULL;
+    }
 
     return signature;
 }

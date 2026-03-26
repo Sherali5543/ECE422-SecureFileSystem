@@ -8,7 +8,7 @@ login, logout, ls, cd, mkdir, create, read, write, rm, and mv
 
 #define MAX_ARGS 3
 
-void cli_loop(Session *session){
+void cli_loop(SSL* ssl, Session *session){
     char* args[MAX_ARGS];
     char* input;
 
@@ -36,6 +36,9 @@ void cli_loop(Session *session){
         } else if (strcmp(cmd, "mv") == 0) {
             printf("'mv' not yet implemented!\n");
         } else if (strcmp(cmd, "logout") == 0) {
+            if (logout(ssl, session) != 0) {
+                fprintf(stderr, "Logout request failed\n");
+            }
             destroy_session(session);
             free(input);
             break;
