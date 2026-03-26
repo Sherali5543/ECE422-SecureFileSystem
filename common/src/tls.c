@@ -3,7 +3,6 @@
 #include <sys/socket.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
-#include <openssl/bio.h>
 
 __attribute__((noreturn)) static void tls_error(SSL_CTX* ctx, BIO* bio,
                                                 SSL* ssl, const char* msg) {
@@ -123,6 +122,7 @@ SSL* tls_client_connect(SSL_CTX* ctx, const char* server_addr,
                         const char* server_port) {
   BIO* cbio = BIO_new_connect(server_addr);
   BIO_set_conn_port(cbio, server_port);
+  BIO_set_sock_type(cbio, SOCK_STREAM);
   BIO_do_connect(cbio);
 
   SSL* ssl = SSL_new(ctx);
