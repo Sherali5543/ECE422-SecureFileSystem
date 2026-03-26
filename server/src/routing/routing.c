@@ -12,12 +12,15 @@ http_message_t* handle_request(http_message_t* msg, SSL* ssl, server_context_t *
 
   switch (msg->method) {
     case GET:
-      if (strncmp(msg->path, "/files", HTTP_MAX_PATH_LEN) == 0) {
-        // get_files(msg, ssl, res); // Ls/cd
+      if (strncmp(msg->path, "/groups", HTTP_MAX_PATH_LEN) == 0) {
+        list_user_groups(msg, ssl, res, ctx);
         return res;
       } else if (strncmp(msg->path, "/files/contents", HTTP_MAX_PATH_LEN) ==
                  0) {
         read_file(msg, ssl, res, ctx);
+        return res;
+      } else if (strncmp(msg->path, "/files", HTTP_MAX_PATH_LEN) == 0) {
+        get_files(msg, ssl, res, ctx);
         return res;
       }
       break;
@@ -36,9 +39,18 @@ http_message_t* handle_request(http_message_t* msg, SSL* ssl, server_context_t *
       } else if (strncmp(msg->path, "/auth/logout", HTTP_MAX_PATH_LEN) == 0) {
         // Handle logout
       } else if (strncmp(msg->path, "/files/move", HTTP_MAX_PATH_LEN) == 0) {
-        // Handle mv
+        move_file(msg, ssl, res, ctx);
+        return res;
       } else if (strncmp(msg->path, "/directories", HTTP_MAX_PATH_LEN) == 0) {
-        // Handle mkdir
+        create_directory(msg, ssl, res, ctx);
+        return res;
+      } else if (strncmp(msg->path, "/groups/members", HTTP_MAX_PATH_LEN) ==
+                 0) {
+        add_group_member(msg, ssl, res, ctx);
+        return res;
+      } else if (strncmp(msg->path, "/groups", HTTP_MAX_PATH_LEN) == 0) {
+        create_group(msg, ssl, res, ctx);
+        return res;
       } else if (strncmp(msg->path, "/files", HTTP_MAX_PATH_LEN) == 0) {
         // Handle create file
         create_file(msg, ssl, res, ctx);
@@ -53,11 +65,15 @@ http_message_t* handle_request(http_message_t* msg, SSL* ssl, server_context_t *
       break;
     case PATCH:
       if (strncmp(msg->path, "/files/permissions", HTTP_MAX_PATH_LEN) == 0) {
-        // Handle perm change
+        update_file_permissions(msg, ssl, res, ctx);
+        return res;
       }
       break;
     case DELETE:
-      if (strncmp(msg->path, "/files", HTTP_MAX_PATH_LEN) == 0) {
+      if (strncmp(msg->path, "/groups/members", HTTP_MAX_PATH_LEN) == 0) {
+        remove_group_member(msg, ssl, res, ctx);
+        return res;
+      } else if (strncmp(msg->path, "/files", HTTP_MAX_PATH_LEN) == 0) {
         delete_file(msg, ssl, res, ctx);
         return res;
       }

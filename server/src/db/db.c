@@ -639,6 +639,33 @@ int db_add_user_to_group(server_context_t* ctx, int user_id, int group_id,
   return finish_statement(stmt, 0);
 }
 
+int db_remove_user_from_group(server_context_t* ctx, int user_id, int group_id) {
+  static const char sql[] =
+      "DELETE FROM group_members WHERE user_id = ?1 AND group_id = ?2;";
+  sqlite3_stmt* stmt = NULL;
+  sqlite3* db = db_handle(ctx);
+
+  if (db == NULL) {
+    return -1;
+  }
+
+  if (prepare_statement(db, &stmt, sql) != 0 ||
+      bind_int_value(db, stmt, 1, user_id,
+                     "db_remove_user_from_group") != 0 ||
+      bind_int_value(db, stmt, 2, group_id,
+                     "db_remove_user_from_group") != 0) {
+    return finish_statement(stmt, -1);
+  }
+
+  if (sqlite3_step(stmt) != SQLITE_DONE) {
+    fprintf(stderr, "db_remove_user_from_group: delete failed: %s\n",
+            sqlite3_errmsg(db));
+    return finish_statement(stmt, -1);
+  }
+
+  return finish_statement(stmt, sqlite3_changes(db) > 0 ? 1 : 0);
+}
+
 int db_is_user_in_group(server_context_t* ctx, int user_id, int group_id,
                         int* out_is_member) {
   static const char sql[] =

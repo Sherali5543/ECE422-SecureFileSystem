@@ -27,6 +27,32 @@ typedef struct {
   char filepath[DB_FILE_PATH_MAX];
 } filepath_query_t;
 
+typedef struct {
+  char* body;
+  cJSON* json;
+  const char* dirpath;
+} create_directory_request_t;
+
+typedef struct {
+  char* body;
+  cJSON* json;
+  const char* source_filepath;
+  const char* destination_filepath;
+} move_file_request_t;
+
+typedef struct {
+  char* body;
+  cJSON* json;
+  const char* filepath;
+  int mode_bits;
+} permissions_request_t;
+
+typedef struct {
+  db_file_metadata_t* items;
+  size_t count;
+  size_t capacity;
+} metadata_vec_t;
+
 static void send_bad_request(http_message_t* response, SSL* ssl) {
   response->status_code = 400;
   strncpy(response->reason, "Bad request", sizeof(response->reason) - 1);
@@ -144,6 +170,62 @@ static void delete_backing_file(server_context_t* ctx, const char* filepath) {
   }
 }
 
+static int create_directory_ctx(server_context_t* ctx, const char* dirpath) {
+  char fullpath[STORAGE_PATH_MAX];
+
+  if (build_storage_path(ctx, dirpath, fullpath, sizeof(fullpath)) != 0) {
+    return -1;
+  }
+  if (ensure_storage_parent_dirs(fullpath) != 0) {
+    return -1;
+  }
+  if (mkdir(fullpath, 0755) != 0) {
+    perror("mkdir");
+    return -1;
+  }
+
+  return 0;
+}
+
+static int rename_storage_path(server_context_t* ctx, const char* old_path,
+                               const char* new_path) {
+  char old_fullpath[STORAGE_PATH_MAX];
+  char new_fullpath[STORAGE_PATH_MAX];
+
+  if (build_storage_path(ctx, old_path, old_fullpath, sizeof(old_fullpath)) !=
+          0 ||
+      build_storage_path(ctx, new_path, new_fullpath, sizeof(new_fullpath)) !=
+          0) {
+    return -1;
+  }
+  if (ensure_storage_parent_dirs(new_fullpath) != 0) {
+    return -1;
+  }
+  if (rename(old_fullpath, new_fullpath) != 0) {
+    perror("rename");
+    return -1;
+  }
+
+  return 0;
+}
+
+static int blob_to_cstring(const unsigned char* blob, size_t blob_len,
+                           char* out, size_t out_sz) {
+  if (!out || out_sz == 0 || blob_len >= out_sz) {
+    return -1;
+  }
+
+  if (blob_len > 0 && blob == NULL) {
+    return -1;
+  }
+
+  if (blob_len > 0) {
+    memcpy(out, blob, blob_len);
+  }
+  out[blob_len] = '\0';
+  return 0;
+}
+
 static int get_user_from_token(server_context_t* ctx, const char* token,
                                server_session_t* out_session) {
   time_t now = 0;
@@ -242,6 +324,28 @@ static int is_valid_logical_path(const char* path) {
   return path[strlen(path) - 1] != '/';
 }
 
+static int has_metadata_permission(server_context_t* ctx, int user_id,
+                                   const db_file_metadata_t* meta,
+                                   int owner_mask, int group_mask,
+                                   int other_mask) {
+  int is_member = 0;
+
+  if (!ctx || !meta) {
+    return 0;
+  }
+  if (meta->owner_id == user_id && (meta->mode_bits & owner_mask)) {
+    return 1;
+  }
+
+  if (meta->has_group_id &&
+      db_is_user_in_group(ctx, user_id, meta->group_id, &is_member) == 0 &&
+      is_member && (meta->mode_bits & group_mask)) {
+    return 1;
+  }
+
+  return (meta->mode_bits & other_mask) != 0;
+}
+
 static int parse_filepath_query(const http_message_t* msg, filepath_query_t* out) {
   static const char prefix[] = "filepath=";
   const char* value = NULL;
@@ -271,50 +375,151 @@ static int parse_filepath_query(const http_message_t* msg, filepath_query_t* out
 
 static int can_create_in_directory(server_context_t* ctx, int user_id,
                                    const db_file_metadata_t* parent_meta) {
-  int is_member = 0;
-
   if (!ctx || !parent_meta) {
     return 0;
   }
   if (strcmp(parent_meta->object_type, "directory") != 0) {
     return 0;
   }
-  if (parent_meta->owner_id == user_id && (parent_meta->mode_bits & 0200)) {
-    return 1;
-  }
-
-  if (parent_meta->has_group_id &&
-      db_is_user_in_group(ctx, user_id, parent_meta->group_id, &is_member) ==
-          0 &&
-      is_member && (parent_meta->mode_bits & 0020)) {
-    return 1;
-  }
-
-  return (parent_meta->mode_bits & 0002) != 0;
+  return has_metadata_permission(ctx, user_id, parent_meta, 0200, 0020, 0002);
 }
 
 static int can_access_file(server_context_t* ctx, int user_id,
                            const db_file_metadata_t* meta, int owner_mask,
                            int group_mask, int other_mask) {
-  int is_member = 0;
-
   if (!ctx || !meta) {
     return 0;
   }
   if (strcmp(meta->object_type, "file") != 0) {
     return 0;
   }
-  if (meta->owner_id == user_id && (meta->mode_bits & owner_mask)) {
-    return 1;
+  return has_metadata_permission(ctx, user_id, meta, owner_mask, group_mask,
+                                 other_mask);
+}
+
+static int can_access_directory(server_context_t* ctx, int user_id,
+                                const db_file_metadata_t* meta, int owner_mask,
+                                int group_mask, int other_mask) {
+  if (!ctx || !meta) {
+    return 0;
+  }
+  if (strcmp(meta->object_type, "directory") != 0) {
+    return 0;
+  }
+  return has_metadata_permission(ctx, user_id, meta, owner_mask, group_mask,
+                                 other_mask);
+}
+
+static int is_subpath_of(const char* parent, const char* candidate) {
+  size_t parent_len = 0;
+
+  if (!parent || !candidate) {
+    return 0;
   }
 
-  if (meta->has_group_id &&
-      db_is_user_in_group(ctx, user_id, meta->group_id, &is_member) == 0 &&
-      is_member && (meta->mode_bits & group_mask)) {
-    return 1;
+  parent_len = strlen(parent);
+  if (strncmp(parent, candidate, parent_len) != 0) {
+    return 0;
   }
 
-  return (meta->mode_bits & other_mask) != 0;
+  return candidate[parent_len] == '/' || candidate[parent_len] == '\0';
+}
+
+static int rewrite_path_prefix(const char* old_prefix, const char* new_prefix,
+                               const char* old_path, char* out,
+                               size_t out_sz) {
+  int written = 0;
+  const char* suffix = NULL;
+
+  if (!old_prefix || !new_prefix || !old_path || !out || out_sz == 0) {
+    return -1;
+  }
+  if (!is_subpath_of(old_prefix, old_path)) {
+    return -1;
+  }
+
+  suffix = old_path + strlen(old_prefix);
+  written = snprintf(out, out_sz, "%s%s", new_prefix, suffix);
+  if (written < 0 || (size_t)written >= out_sz) {
+    return -1;
+  }
+
+  return 0;
+}
+
+static int metadata_vec_push(metadata_vec_t* vec,
+                             const db_file_metadata_t* metadata) {
+  db_file_metadata_t* new_items = NULL;
+  size_t new_capacity = 0;
+
+  if (!vec || !metadata) {
+    return -1;
+  }
+  if (vec->count == vec->capacity) {
+    new_capacity = vec->capacity == 0 ? 8 : vec->capacity * 2;
+    new_items = realloc(vec->items, new_capacity * sizeof(*new_items));
+    if (new_items == NULL) {
+      return -1;
+    }
+    vec->items = new_items;
+    vec->capacity = new_capacity;
+  }
+
+  vec->items[vec->count++] = *metadata;
+  return 0;
+}
+
+static void metadata_vec_cleanup(metadata_vec_t* vec) {
+  if (!vec) {
+    return;
+  }
+
+  free(vec->items);
+  vec->items = NULL;
+  vec->count = 0;
+  vec->capacity = 0;
+}
+
+static int collect_descendants(server_context_t* ctx, const unsigned char* path,
+                               size_t path_len, metadata_vec_t* out_vec) {
+  db_file_metadata_t* children = NULL;
+  size_t child_count = 0;
+
+  if (!ctx || !path || !out_vec) {
+    return -1;
+  }
+  if (db_list_children(ctx, path, path_len, NULL, 0, &child_count) != 0) {
+    return -1;
+  }
+  if (child_count == 0) {
+    return 0;
+  }
+
+  children = calloc(child_count, sizeof(*children));
+  if (children == NULL) {
+    return -1;
+  }
+  if (db_list_children(ctx, path, path_len, children, child_count,
+                       &child_count) != 0) {
+    free(children);
+    return -1;
+  }
+
+  for (size_t i = 0; i < child_count; i++) {
+    if (metadata_vec_push(out_vec, &children[i]) != 0) {
+      free(children);
+      return -1;
+    }
+    if (strcmp(children[i].object_type, "directory") == 0 &&
+        collect_descendants(ctx, children[i].path, children[i].path_len,
+                            out_vec) != 0) {
+      free(children);
+      return -1;
+    }
+  }
+
+  free(children);
+  return 0;
 }
 
 static int delete_file_metadata_and_backing_file(server_context_t* ctx,
@@ -345,6 +550,39 @@ static int delete_file_metadata_and_backing_file(server_context_t* ctx,
 }
 
 static void cleanup_create_file_request(create_file_request_t* req) {
+  if (!req) {
+    return;
+  }
+
+  if (req->json) {
+    cJSON_Delete(req->json);
+  }
+  free(req->body);
+}
+
+static void cleanup_create_directory_request(create_directory_request_t* req) {
+  if (!req) {
+    return;
+  }
+
+  if (req->json) {
+    cJSON_Delete(req->json);
+  }
+  free(req->body);
+}
+
+static void cleanup_move_file_request(move_file_request_t* req) {
+  if (!req) {
+    return;
+  }
+
+  if (req->json) {
+    cJSON_Delete(req->json);
+  }
+  free(req->body);
+}
+
+static void cleanup_permissions_request(permissions_request_t* req) {
   if (!req) {
     return;
   }
@@ -419,6 +657,234 @@ static int parse_create_file_request(http_message_t* msg, SSL* ssl,
   return 0;
 }
 
+static int parse_create_directory_request(http_message_t* msg, SSL* ssl,
+                                          http_message_t* response,
+                                          create_directory_request_t* out_req,
+                                          size_t* out_body_bytes_read) {
+  cJSON* dirpath_json = NULL;
+
+  if (!msg || !ssl || !response || !out_req || !out_body_bytes_read) {
+    return -1;
+  }
+
+  memset(out_req, 0, sizeof(*out_req));
+  *out_body_bytes_read = 0;
+
+  if (msg->content_type != JSON) {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 415, "Unsupported Media Type",
+                    "{\"error\":\"expected application/json\"}");
+    return -1;
+  }
+  if (msg->content_length == 0 || msg->content_length > HTTP_MAX_BODY_LEN) {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"invalid content length\"}");
+    return -1;
+  }
+
+  out_req->body = calloc(msg->content_length + 1, 1);
+  if (!out_req->body) {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"allocation failure\"}");
+    return -1;
+  }
+  if (read_exact_body(msg, ssl, out_req->body, msg->content_length) != 0) {
+    send_bad_request(response, ssl);
+    return -1;
+  }
+  *out_body_bytes_read = msg->content_length;
+
+  out_req->json = cJSON_Parse(out_req->body);
+  if (!out_req->json) {
+    send_bad_request(response, ssl);
+    return -1;
+  }
+
+  dirpath_json = cJSON_GetObjectItemCaseSensitive(out_req->json, "dirpath");
+  if (!cJSON_IsString(dirpath_json) || dirpath_json->valuestring == NULL) {
+    dirpath_json = cJSON_GetObjectItemCaseSensitive(out_req->json, "filepath");
+  }
+  if (!cJSON_IsString(dirpath_json) || dirpath_json->valuestring == NULL) {
+    send_bad_request(response, ssl);
+    return -1;
+  }
+
+  out_req->dirpath = dirpath_json->valuestring;
+  if (strlen(out_req->dirpath) >= DB_FILE_PATH_MAX ||
+      !is_valid_logical_path(out_req->dirpath)) {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"invalid dirpath\"}");
+    return -1;
+  }
+
+  return 0;
+}
+
+static int parse_move_file_request(http_message_t* msg, SSL* ssl,
+                                   http_message_t* response,
+                                   move_file_request_t* out_req,
+                                   size_t* out_body_bytes_read) {
+  cJSON* source_json = NULL;
+  cJSON* dest_json = NULL;
+
+  if (!msg || !ssl || !response || !out_req || !out_body_bytes_read) {
+    return -1;
+  }
+
+  memset(out_req, 0, sizeof(*out_req));
+  *out_body_bytes_read = 0;
+
+  if (msg->content_type != JSON) {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 415, "Unsupported Media Type",
+                    "{\"error\":\"expected application/json\"}");
+    return -1;
+  }
+  if (msg->content_length == 0 || msg->content_length > HTTP_MAX_BODY_LEN) {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"invalid content length\"}");
+    return -1;
+  }
+
+  out_req->body = calloc(msg->content_length + 1, 1);
+  if (!out_req->body) {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"allocation failure\"}");
+    return -1;
+  }
+  if (read_exact_body(msg, ssl, out_req->body, msg->content_length) != 0) {
+    send_bad_request(response, ssl);
+    return -1;
+  }
+  *out_body_bytes_read = msg->content_length;
+
+  out_req->json = cJSON_Parse(out_req->body);
+  if (!out_req->json) {
+    send_bad_request(response, ssl);
+    return -1;
+  }
+
+  source_json =
+      cJSON_GetObjectItemCaseSensitive(out_req->json, "source_filepath");
+  dest_json =
+      cJSON_GetObjectItemCaseSensitive(out_req->json, "destination_filepath");
+  if (!cJSON_IsString(source_json) || source_json->valuestring == NULL ||
+      !cJSON_IsString(dest_json) || dest_json->valuestring == NULL) {
+    send_bad_request(response, ssl);
+    return -1;
+  }
+
+  out_req->source_filepath = source_json->valuestring;
+  out_req->destination_filepath = dest_json->valuestring;
+  if (strlen(out_req->source_filepath) >= DB_FILE_PATH_MAX ||
+      strlen(out_req->destination_filepath) >= DB_FILE_PATH_MAX ||
+      !is_valid_logical_path(out_req->source_filepath) ||
+      !is_valid_logical_path(out_req->destination_filepath) ||
+      strcmp(out_req->source_filepath, out_req->destination_filepath) == 0) {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"invalid move request\"}");
+    return -1;
+  }
+
+  return 0;
+}
+
+static int parse_mode_bits_json(cJSON* mode_json, int* out_mode_bits) {
+  char* endptr = NULL;
+  long mode = 0;
+
+  if (!mode_json || !out_mode_bits) {
+    return -1;
+  }
+  if (cJSON_IsNumber(mode_json)) {
+    mode = (long)mode_json->valuedouble;
+  } else if (cJSON_IsString(mode_json) && mode_json->valuestring != NULL) {
+    errno = 0;
+    mode = strtol(mode_json->valuestring, &endptr, 8);
+    if (errno != 0 || endptr == mode_json->valuestring || *endptr != '\0') {
+      return -1;
+    }
+  } else {
+    return -1;
+  }
+
+  if (mode < 0 || mode > 0777) {
+    return -1;
+  }
+
+  *out_mode_bits = (int)mode;
+  return 0;
+}
+
+static int parse_permissions_request(http_message_t* msg, SSL* ssl,
+                                     http_message_t* response,
+                                     permissions_request_t* out_req,
+                                     size_t* out_body_bytes_read) {
+  cJSON* filepath_json = NULL;
+  cJSON* mode_bits_json = NULL;
+
+  if (!msg || !ssl || !response || !out_req || !out_body_bytes_read) {
+    return -1;
+  }
+
+  memset(out_req, 0, sizeof(*out_req));
+  *out_body_bytes_read = 0;
+
+  if (msg->content_type != JSON) {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 415, "Unsupported Media Type",
+                    "{\"error\":\"expected application/json\"}");
+    return -1;
+  }
+  if (msg->content_length == 0 || msg->content_length > HTTP_MAX_BODY_LEN) {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"invalid content length\"}");
+    return -1;
+  }
+
+  out_req->body = calloc(msg->content_length + 1, 1);
+  if (!out_req->body) {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"allocation failure\"}");
+    return -1;
+  }
+  if (read_exact_body(msg, ssl, out_req->body, msg->content_length) != 0) {
+    send_bad_request(response, ssl);
+    return -1;
+  }
+  *out_body_bytes_read = msg->content_length;
+
+  out_req->json = cJSON_Parse(out_req->body);
+  if (!out_req->json) {
+    send_bad_request(response, ssl);
+    return -1;
+  }
+
+  filepath_json = cJSON_GetObjectItemCaseSensitive(out_req->json, "filepath");
+  mode_bits_json = cJSON_GetObjectItemCaseSensitive(out_req->json, "mode_bits");
+  if (!cJSON_IsString(filepath_json) || filepath_json->valuestring == NULL) {
+    send_bad_request(response, ssl);
+    return -1;
+  }
+
+  out_req->filepath = filepath_json->valuestring;
+  if (strlen(out_req->filepath) >= DB_FILE_PATH_MAX ||
+      !is_valid_logical_path(out_req->filepath) ||
+      parse_mode_bits_json(mode_bits_json, &out_req->mode_bits) != 0) {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"invalid filepath or mode_bits\"}");
+    return -1;
+  }
+
+  return 0;
+}
+
 static int populate_new_file_metadata(const char* filepath, const char* file_name,
                                       const server_session_t* session,
                                       const db_file_metadata_t* parent_meta,
@@ -451,6 +917,38 @@ static int populate_new_file_metadata(const char* filepath, const char* file_nam
   return 0;
 }
 
+static int populate_new_directory_metadata(
+    const char* dirpath, const char* dir_name, const server_session_t* session,
+    const db_file_metadata_t* parent_meta, db_file_metadata_t* out_meta) {
+  size_t dirpath_len = 0;
+  size_t dir_name_len = 0;
+  long long now = 0;
+
+  if (!dirpath || !dir_name || !session || !parent_meta || !out_meta) {
+    return -1;
+  }
+
+  dirpath_len = strlen(dirpath);
+  dir_name_len = strlen(dir_name);
+  now = (long long)time(NULL);
+
+  memset(out_meta, 0, sizeof(*out_meta));
+  memcpy(out_meta->path, dirpath, dirpath_len);
+  out_meta->path_len = dirpath_len;
+  memcpy(out_meta->name, dir_name, dir_name_len);
+  out_meta->name_len = dir_name_len;
+  out_meta->owner_id = session->user_id;
+  out_meta->group_id = parent_meta->group_id;
+  out_meta->has_group_id = parent_meta->has_group_id;
+  out_meta->mode_bits = 0750;
+  strncpy(out_meta->object_type, "directory",
+          sizeof(out_meta->object_type) - 1);
+  out_meta->created_at = now;
+  out_meta->updated_at = now;
+
+  return 0;
+}
+
 static int create_file_metadata_and_backing_file(server_context_t* ctx,
                                                  const db_file_metadata_t* meta,
                                                  int* out_metadata_id) {
@@ -474,6 +972,164 @@ static int create_file_metadata_and_backing_file(server_context_t* ctx,
     return -1;
   }
 
+  return 0;
+}
+
+static int create_directory_metadata_and_backing_dir(
+    server_context_t* ctx, const db_file_metadata_t* meta, int* out_metadata_id) {
+  if (db_begin_transaction(ctx) != 0) {
+    return -1;
+  }
+
+  if (db_create_file_metadata(ctx, meta, out_metadata_id) != 0) {
+    db_rollback(ctx);
+    return -1;
+  }
+
+  if (create_directory_ctx(ctx, (const char*)meta->path) != 0) {
+    db_rollback(ctx);
+    return -1;
+  }
+
+  if (db_commit(ctx) != 0) {
+    db_rollback(ctx);
+    return -1;
+  }
+
+  return 0;
+}
+
+static int update_single_metadata_path(server_context_t* ctx,
+                                       const db_file_metadata_t* source_meta,
+                                       const char* current_path,
+                                       const char* new_path) {
+  db_file_metadata_t updated = *source_meta;
+  const char* last_slash = NULL;
+  size_t new_path_len = 0;
+  size_t name_len = 0;
+
+  if (!ctx || !source_meta || !current_path || !new_path) {
+    return -1;
+  }
+  last_slash = strrchr(new_path, '/');
+  if (!last_slash || *(last_slash + 1) == '\0') {
+    return -1;
+  }
+  new_path_len = strlen(new_path);
+  name_len = strlen(last_slash + 1);
+  if (new_path_len >= sizeof(updated.path) || name_len >= sizeof(updated.name)) {
+    return -1;
+  }
+
+  memset(updated.path, 0, sizeof(updated.path));
+  memcpy(updated.path, new_path, new_path_len);
+  updated.path_len = new_path_len;
+  memset(updated.name, 0, sizeof(updated.name));
+  memcpy(updated.name, last_slash + 1, name_len);
+  updated.name_len = name_len;
+  updated.updated_at = (long long)time(NULL);
+
+  return db_update_file_metadata(ctx, current_path, strlen(current_path),
+                                 &updated);
+}
+
+static int apply_directory_move_metadata(server_context_t* ctx,
+                                         const db_file_metadata_t* source_meta,
+                                         const char* new_path) {
+  metadata_vec_t descendants = {0};
+  char source_path[DB_FILE_PATH_MAX];
+  char current_path[DB_FILE_PATH_MAX];
+  char rewritten_path[DB_FILE_PATH_MAX];
+
+  if (!ctx || !source_meta || !new_path) {
+    return -1;
+  }
+  if (blob_to_cstring(source_meta->path, source_meta->path_len, source_path,
+                      sizeof(source_path)) != 0) {
+    return -1;
+  }
+
+  if (collect_descendants(ctx, source_meta->path, source_meta->path_len,
+                          &descendants) != 0) {
+    metadata_vec_cleanup(&descendants);
+    return -1;
+  }
+
+  if (db_begin_transaction(ctx) != 0) {
+    metadata_vec_cleanup(&descendants);
+    return -1;
+  }
+
+  if (update_single_metadata_path(ctx, source_meta, source_path, new_path) < 0) {
+    db_rollback(ctx);
+    metadata_vec_cleanup(&descendants);
+    return -1;
+  }
+
+  for (size_t i = 0; i < descendants.count; i++) {
+    if (blob_to_cstring(descendants.items[i].path, descendants.items[i].path_len,
+                        current_path, sizeof(current_path)) != 0 ||
+        rewrite_path_prefix(source_path, new_path, current_path, rewritten_path,
+                            sizeof(rewritten_path)) != 0 ||
+        update_single_metadata_path(ctx, &descendants.items[i], current_path,
+                                    rewritten_path) < 0) {
+      db_rollback(ctx);
+      metadata_vec_cleanup(&descendants);
+      return -1;
+    }
+  }
+
+  metadata_vec_cleanup(&descendants);
+  return 0;
+}
+
+static int finalize_move_transaction(server_context_t* ctx, const char* old_path,
+                                     const char* new_path) {
+  if (rename_storage_path(ctx, old_path, new_path) != 0) {
+    db_rollback(ctx);
+    return -1;
+  }
+
+  if (db_commit(ctx) != 0) {
+    rename_storage_path(ctx, new_path, old_path);
+    db_rollback(ctx);
+    return -1;
+  }
+
+  return 0;
+}
+
+static int append_entry_json(cJSON* entries, const db_file_metadata_t* meta) {
+  cJSON* item = NULL;
+  char path[DB_FILE_PATH_MAX];
+  char name[DB_FILE_NAME_MAX];
+
+  if (!entries || !meta) {
+    return -1;
+  }
+  if (blob_to_cstring(meta->path, meta->path_len, path, sizeof(path)) != 0 ||
+      blob_to_cstring(meta->name, meta->name_len, name, sizeof(name)) != 0) {
+    return -1;
+  }
+
+  item = cJSON_CreateObject();
+  if (item == NULL) {
+    return -1;
+  }
+
+  cJSON_AddStringToObject(item, "path", path);
+  cJSON_AddStringToObject(item, "name", name);
+  cJSON_AddStringToObject(item, "object_type", meta->object_type);
+  cJSON_AddNumberToObject(item, "owner_id", meta->owner_id);
+  if (meta->has_group_id) {
+    cJSON_AddNumberToObject(item, "group_id", meta->group_id);
+  } else {
+    cJSON_AddNullToObject(item, "group_id");
+  }
+  cJSON_AddNumberToObject(item, "mode_bits", meta->mode_bits);
+  cJSON_AddNumberToObject(item, "created_at", (double)meta->created_at);
+  cJSON_AddNumberToObject(item, "updated_at", (double)meta->updated_at);
+  cJSON_AddItemToArray(entries, item);
   return 0;
 }
 
@@ -582,6 +1238,452 @@ cleanup:
     drain_message_body(ssl, msg, msg->content_length - body_bytes_read);
   }
   cleanup_create_file_request(&req);
+}
+
+void create_directory(http_message_t* msg, SSL* ssl,
+                      http_message_t* response, server_context_t* ctx) {
+  create_directory_request_t req = {0};
+  char parent_path[DB_FILE_PATH_MAX];
+  char dir_name[DB_FILE_NAME_MAX];
+  server_session_t session;
+  db_file_metadata_t parent_meta;
+  db_file_metadata_t existing_meta;
+  db_file_metadata_t new_meta;
+  size_t body_bytes_read = 0;
+  int metadata_id = 0;
+  int rc = 0;
+
+  if (!msg || !ssl || !response || !ctx) {
+    return;
+  }
+  if (msg->auth_token[0] == '\0') {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 401, "Unauthorized",
+                    "{\"error\":\"missing bearer token\"}");
+    return;
+  }
+  if (parse_create_directory_request(msg, ssl, response, &req,
+                                     &body_bytes_read) != 0) {
+    goto cleanup;
+  }
+  if (split_parent_child(req.dirpath, parent_path, sizeof(parent_path),
+                         dir_name, sizeof(dir_name)) != 0) {
+    send_bad_request(response, ssl);
+    goto cleanup;
+  }
+  if (get_user_from_token(ctx, msg->auth_token, &session) != 0) {
+    send_json_error(ssl, response, 401, "Unauthorized",
+                    "{\"error\":\"invalid or expired token\"}");
+    goto cleanup;
+  }
+
+  rc = db_find_file_metadata_by_path(ctx, parent_path, strlen(parent_path),
+                                     &parent_meta);
+  if (rc != 1) {
+    send_json_error(ssl, response, 404, "Not Found",
+                    "{\"error\":\"parent directory not found\"}");
+    goto cleanup;
+  }
+  if (!can_create_in_directory(ctx, session.user_id, &parent_meta)) {
+    send_json_error(ssl, response, 403, "Forbidden",
+                    "{\"error\":\"insufficient permissions\"}");
+    goto cleanup;
+  }
+
+  rc = db_find_file_metadata_by_path(ctx, req.dirpath, strlen(req.dirpath),
+                                     &existing_meta);
+  if (rc == -1) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to check existing directory\"}");
+    goto cleanup;
+  }
+  if (rc == 1) {
+    send_json_error(ssl, response, 409, "Conflict",
+                    "{\"error\":\"path already exists\"}");
+    goto cleanup;
+  }
+
+  if (populate_new_directory_metadata(req.dirpath, dir_name, &session,
+                                      &parent_meta, &new_meta) != 0) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to build directory metadata\"}");
+    goto cleanup;
+  }
+  if (create_directory_metadata_and_backing_dir(ctx, &new_meta, &metadata_id) !=
+      0) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to create directory\"}");
+    goto cleanup;
+  }
+
+  {
+    char resp[CREATE_FILE_RESPONSE_MAX];
+    int n = snprintf(resp, sizeof(resp),
+                     "{\"message\":\"directory created\",\"dirpath\":\"%s\","
+                     "\"directory_id\":%d}",
+                     req.dirpath, metadata_id);
+    if (n < 0 || (size_t)n >= sizeof(resp)) {
+      send_json_error(ssl, response, 500, "Internal Server Error",
+                      "{\"error\":\"response build failure\"}");
+      goto cleanup;
+    }
+
+    set_json_response(response, 201, "Created", (size_t)n);
+    send_response(ssl, response);
+    write_json_body(ssl, resp);
+  }
+
+cleanup:
+  if (body_bytes_read < msg->content_length) {
+    drain_message_body(ssl, msg, msg->content_length - body_bytes_read);
+  }
+  cleanup_create_directory_request(&req);
+}
+
+void get_files(http_message_t* msg, SSL* ssl, http_message_t* response,
+               server_context_t* ctx) {
+  filepath_query_t query = {0};
+  server_session_t session;
+  db_file_metadata_t directory_meta;
+  db_file_metadata_t* children = NULL;
+  cJSON* root = NULL;
+  cJSON* entries = NULL;
+  char* json = NULL;
+  size_t child_count = 0;
+  int rc = 0;
+
+  if (!msg || !ssl || !response || !ctx) {
+    return;
+  }
+  if (msg->auth_token[0] == '\0') {
+    send_json_error(ssl, response, 401, "Unauthorized",
+                    "{\"error\":\"missing bearer token\"}");
+    return;
+  }
+  if (parse_filepath_query(msg, &query) != 0) {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"missing or invalid filepath query\"}");
+    return;
+  }
+  if (get_user_from_token(ctx, msg->auth_token, &session) != 0) {
+    send_json_error(ssl, response, 401, "Unauthorized",
+                    "{\"error\":\"invalid or expired token\"}");
+    return;
+  }
+
+  rc = db_find_file_metadata_by_path(ctx, query.filepath, strlen(query.filepath),
+                                     &directory_meta);
+  if (rc == -1) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to load directory metadata\"}");
+    return;
+  }
+  if (rc == 0) {
+    send_json_error(ssl, response, 404, "Not Found",
+                    "{\"error\":\"directory not found\"}");
+    return;
+  }
+  if (strcmp(directory_meta.object_type, "directory") != 0) {
+    send_json_error(ssl, response, 400, "Bad Request",
+                    "{\"error\":\"filepath is not a directory\"}");
+    return;
+  }
+  if (!can_access_directory(ctx, session.user_id, &directory_meta, 0400, 0040,
+                            0004)) {
+    send_json_error(ssl, response, 403, "Forbidden",
+                    "{\"error\":\"insufficient permissions\"}");
+    return;
+  }
+
+  if (db_list_children(ctx, query.filepath, strlen(query.filepath), NULL, 0,
+                       &child_count) != 0) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to list directory\"}");
+    return;
+  }
+  if (child_count > 0) {
+    children = calloc(child_count, sizeof(*children));
+    if (children == NULL) {
+      send_json_error(ssl, response, 500, "Internal Server Error",
+                      "{\"error\":\"allocation failure\"}");
+      return;
+    }
+    if (db_list_children(ctx, query.filepath, strlen(query.filepath), children,
+                         child_count, &child_count) != 0) {
+      send_json_error(ssl, response, 500, "Internal Server Error",
+                      "{\"error\":\"failed to list directory\"}");
+      goto cleanup;
+    }
+  }
+
+  root = cJSON_CreateObject();
+  if (root == NULL) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"response build failure\"}");
+    goto cleanup;
+  }
+  cJSON_AddStringToObject(root, "directory", query.filepath);
+  entries = cJSON_AddArrayToObject(root, "entries");
+  if (entries == NULL) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"response build failure\"}");
+    goto cleanup;
+  }
+
+  for (size_t i = 0; i < child_count; i++) {
+    if (append_entry_json(entries, &children[i]) != 0) {
+      send_json_error(ssl, response, 500, "Internal Server Error",
+                      "{\"error\":\"response build failure\"}");
+      goto cleanup;
+    }
+  }
+
+  json = cJSON_PrintUnformatted(root);
+  if (json == NULL) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"response build failure\"}");
+    goto cleanup;
+  }
+
+  set_json_response(response, 200, "OK", strlen(json));
+  send_response(ssl, response);
+  write_json_body(ssl, json);
+
+cleanup:
+  free(json);
+  if (root != NULL) {
+    cJSON_Delete(root);
+  }
+  free(children);
+}
+
+void move_file(http_message_t* msg, SSL* ssl, http_message_t* response,
+               server_context_t* ctx) {
+  move_file_request_t req = {0};
+  server_session_t session;
+  db_file_metadata_t source_meta;
+  db_file_metadata_t destination_parent_meta;
+  db_file_metadata_t existing_meta;
+  char destination_parent[DB_FILE_PATH_MAX];
+  char destination_name[DB_FILE_NAME_MAX];
+  size_t body_bytes_read = 0;
+  int rc = 0;
+
+  if (!msg || !ssl || !response || !ctx) {
+    return;
+  }
+  if (msg->auth_token[0] == '\0') {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 401, "Unauthorized",
+                    "{\"error\":\"missing bearer token\"}");
+    return;
+  }
+  if (get_user_from_token(ctx, msg->auth_token, &session) != 0) {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 401, "Unauthorized",
+                    "{\"error\":\"invalid or expired token\"}");
+    return;
+  }
+  if (parse_move_file_request(msg, ssl, response, &req, &body_bytes_read) !=
+      0) {
+    goto cleanup;
+  }
+  if (split_parent_child(req.destination_filepath, destination_parent,
+                         sizeof(destination_parent), destination_name,
+                         sizeof(destination_name)) != 0) {
+    send_bad_request(response, ssl);
+    goto cleanup;
+  }
+
+  rc = db_find_file_metadata_by_path(ctx, req.source_filepath,
+                                     strlen(req.source_filepath), &source_meta);
+  if (rc == -1) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to load source metadata\"}");
+    goto cleanup;
+  }
+  if (rc == 0) {
+    send_json_error(ssl, response, 404, "Not Found",
+                    "{\"error\":\"source path not found\"}");
+    goto cleanup;
+  }
+
+  rc = db_find_file_metadata_by_path(ctx, destination_parent,
+                                     strlen(destination_parent),
+                                     &destination_parent_meta);
+  if (rc != 1) {
+    send_json_error(ssl, response, 404, "Not Found",
+                    "{\"error\":\"destination parent not found\"}");
+    goto cleanup;
+  }
+  if (!can_create_in_directory(ctx, session.user_id, &destination_parent_meta)) {
+    send_json_error(ssl, response, 403, "Forbidden",
+                    "{\"error\":\"insufficient permissions\"}");
+    goto cleanup;
+  }
+
+  if (strcmp(source_meta.object_type, "file") == 0) {
+    if (!can_access_file(ctx, session.user_id, &source_meta, 0200, 0020,
+                         0002)) {
+      send_json_error(ssl, response, 403, "Forbidden",
+                      "{\"error\":\"insufficient permissions\"}");
+      goto cleanup;
+    }
+  } else if (strcmp(source_meta.object_type, "directory") == 0) {
+    if (!can_access_directory(ctx, session.user_id, &source_meta, 0200, 0020,
+                              0002)) {
+      send_json_error(ssl, response, 403, "Forbidden",
+                      "{\"error\":\"insufficient permissions\"}");
+      goto cleanup;
+    }
+    if (is_subpath_of(req.source_filepath, req.destination_filepath)) {
+      send_json_error(ssl, response, 400, "Bad Request",
+                      "{\"error\":\"cannot move a directory inside itself\"}");
+      goto cleanup;
+    }
+  }
+
+  rc = db_find_file_metadata_by_path(ctx, req.destination_filepath,
+                                     strlen(req.destination_filepath),
+                                     &existing_meta);
+  if (rc == -1) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to check destination path\"}");
+    goto cleanup;
+  }
+  if (rc == 1) {
+    send_json_error(ssl, response, 409, "Conflict",
+                    "{\"error\":\"destination path already exists\"}");
+    goto cleanup;
+  }
+
+  if (strcmp(source_meta.object_type, "directory") == 0) {
+    if (apply_directory_move_metadata(ctx, &source_meta,
+                                      req.destination_filepath) != 0) {
+      send_json_error(ssl, response, 500, "Internal Server Error",
+                      "{\"error\":\"failed to update directory metadata\"}");
+      goto cleanup;
+    }
+  } else {
+    if (db_begin_transaction(ctx) != 0 ||
+        update_single_metadata_path(ctx, &source_meta, req.source_filepath,
+                                    req.destination_filepath) < 0) {
+      db_rollback(ctx);
+      send_json_error(ssl, response, 500, "Internal Server Error",
+                      "{\"error\":\"failed to update file metadata\"}");
+      goto cleanup;
+    }
+  }
+
+  if (finalize_move_transaction(ctx, req.source_filepath,
+                                req.destination_filepath) != 0) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to move storage path\"}");
+    goto cleanup;
+  }
+
+  {
+    char resp[CREATE_FILE_RESPONSE_MAX];
+    int n = snprintf(resp, sizeof(resp),
+                     "{\"message\":\"path moved\",\"from\":\"%s\","
+                     "\"to\":\"%s\"}",
+                     req.source_filepath, req.destination_filepath);
+    if (n < 0 || (size_t)n >= sizeof(resp)) {
+      send_json_error(ssl, response, 500, "Internal Server Error",
+                      "{\"error\":\"response build failure\"}");
+      goto cleanup;
+    }
+
+    set_json_response(response, 200, "OK", (size_t)n);
+    send_response(ssl, response);
+    write_json_body(ssl, resp);
+  }
+
+cleanup:
+  if (body_bytes_read < msg->content_length) {
+    drain_message_body(ssl, msg, msg->content_length - body_bytes_read);
+  }
+  cleanup_move_file_request(&req);
+}
+
+void update_file_permissions(http_message_t* msg, SSL* ssl,
+                             http_message_t* response,
+                             server_context_t* ctx) {
+  permissions_request_t req = {0};
+  server_session_t session;
+  db_file_metadata_t meta;
+  size_t body_bytes_read = 0;
+  int rc = 0;
+
+  if (!msg || !ssl || !response || !ctx) {
+    return;
+  }
+  if (msg->auth_token[0] == '\0') {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 401, "Unauthorized",
+                    "{\"error\":\"missing bearer token\"}");
+    return;
+  }
+  if (get_user_from_token(ctx, msg->auth_token, &session) != 0) {
+    drain_message_body(ssl, msg, msg->content_length);
+    send_json_error(ssl, response, 401, "Unauthorized",
+                    "{\"error\":\"invalid or expired token\"}");
+    return;
+  }
+  if (parse_permissions_request(msg, ssl, response, &req, &body_bytes_read) !=
+      0) {
+    goto cleanup;
+  }
+
+  rc = db_find_file_metadata_by_path(ctx, req.filepath, strlen(req.filepath),
+                                     &meta);
+  if (rc == -1) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to load metadata\"}");
+    goto cleanup;
+  }
+  if (rc == 0) {
+    send_json_error(ssl, response, 404, "Not Found",
+                    "{\"error\":\"path not found\"}");
+    goto cleanup;
+  }
+  if (meta.owner_id != session.user_id) {
+    send_json_error(ssl, response, 403, "Forbidden",
+                    "{\"error\":\"only the owner can update permissions\"}");
+    goto cleanup;
+  }
+
+  meta.mode_bits = req.mode_bits;
+  meta.updated_at = (long long)time(NULL);
+  rc = db_update_file_metadata(ctx, req.filepath, strlen(req.filepath), &meta);
+  if (rc < 0) {
+    send_json_error(ssl, response, 500, "Internal Server Error",
+                    "{\"error\":\"failed to update permissions\"}");
+    goto cleanup;
+  }
+
+  {
+    char resp[256];
+    int n = snprintf(resp, sizeof(resp),
+                     "{\"message\":\"permissions updated\",\"filepath\":\"%s\","
+                     "\"mode_bits\":%d}",
+                     req.filepath, req.mode_bits);
+    if (n < 0 || (size_t)n >= sizeof(resp)) {
+      send_json_error(ssl, response, 500, "Internal Server Error",
+                      "{\"error\":\"response build failure\"}");
+      goto cleanup;
+    }
+
+    set_json_response(response, 200, "OK", (size_t)n);
+    send_response(ssl, response);
+    write_json_body(ssl, resp);
+  }
+
+cleanup:
+  if (body_bytes_read < msg->content_length) {
+    drain_message_body(ssl, msg, msg->content_length - body_bytes_read);
+  }
+  cleanup_permissions_request(&req);
 }
 
 void write_file(http_message_t* msg, SSL* ssl, http_message_t* response,
