@@ -23,18 +23,14 @@ http_message_t* handle_request(http_message_t* msg, SSL* ssl, server_context_t *
       break;
     case POST:
       if (strncmp(msg->path, "/auth/login", HTTP_MAX_PATH_LEN) == 0) {
-        printf("HOLY WE POST LOGIN\n");
-        char buf[HTTP_MAX_BODY_LEN];
-        tls_read(ssl, buf, sizeof(buf));
-        printf("%s\n", buf);
-        res->status_code = 200;
-        strncpy(res->reason, "Authorized", HTTP_MAX_QUERY_LEN);
+        login_user(msg, ssl, res, ctx);
         return res;
-        // Handle login
       } else if (strncmp(msg->path, "/auth/register", HTTP_MAX_PATH_LEN) == 0) {
-        // Handle registration
+        register_user(msg, ssl, res, ctx);
+        return res;
       } else if (strncmp(msg->path, "/auth/logout", HTTP_MAX_PATH_LEN) == 0) {
-        // Handle logout
+        logout_user(msg, ssl, res, ctx);
+        return res;
       } else if (strncmp(msg->path, "/files/move", HTTP_MAX_PATH_LEN) == 0) {
         // Handle mv
       } else if (strncmp(msg->path, "/directories", HTTP_MAX_PATH_LEN) == 0) {
