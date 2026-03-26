@@ -186,13 +186,19 @@ static char* request_login_challenge(SSL* ssl, const char* username) {
 }
 
 static char* submit_login_signature(SSL* ssl, const char* username,
-                                    const char* signature_hex) {
+                                    const char* signature_hex,
+                                    int* out_user_id) {
   cJSON* json = NULL;
   cJSON* token_json = NULL;
+  cJSON* user_id_json = NULL;
   http_message_t* response = NULL;
   char* request_body = NULL;
   char* response_body = NULL;
   char* token = NULL;
+
+  if (out_user_id != NULL) {
+    *out_user_id = 0;
+  }
 
   json = cJSON_CreateObject();
   if (!json) {
@@ -228,8 +234,12 @@ static char* submit_login_signature(SSL* ssl, const char* username,
   }
 
   token_json = cJSON_GetObjectItemCaseSensitive(json, "token");
+  user_id_json = cJSON_GetObjectItemCaseSensitive(json, "user_id");
   if (cJSON_IsString(token_json) && token_json->valuestring != NULL) {
     token = strdup(token_json->valuestring);
+  }
+  if (out_user_id != NULL && cJSON_IsNumber(user_id_json)) {
+    *out_user_id = user_id_json->valueint;
   }
 
   cJSON_Delete(json);
@@ -418,6 +428,7 @@ Session login(SSL* ssl) {
   size_t challenge_len = 0;
   char* signed_challenge = NULL;
   char signature_hex[(crypto_sign_BYTES + crypto_sign_BYTES) * 2 + 1];
+  int user_id = 0;
 
   setStdinEcho(true);
 
@@ -476,7 +487,7 @@ Session login(SSL* ssl) {
   }
   free(signed_challenge);
 
-  s.token = submit_login_signature(ssl, username, signature_hex);
+  s.token = submit_login_signature(ssl, username, signature_hex, &user_id);
   if (!s.token) {
     fprintf(stderr, "Login failed\n");
     free(user_keys);
@@ -486,7 +497,7 @@ Session login(SSL* ssl) {
     return s;
   }
 
-  s.id = 0;
+  s.id = user_id;
   s.username = username;
   s.user_keys = user_keys;
   s.sign_keys = sign_keys;

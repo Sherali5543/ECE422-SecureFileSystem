@@ -1,0 +1,4 @@
+login
+alice
+alicepass
+logout

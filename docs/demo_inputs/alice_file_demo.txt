@@ -1,0 +1,11 @@
+login
+alice
+alicepass
+mkdir docs
+create docs/a.txt
+write docs/a.txt hello from alice
+read docs/a.txt
+mv docs/a.txt docs/a2.txt
+ls docs
+chmod 0600 docs/a2.txt
+logout

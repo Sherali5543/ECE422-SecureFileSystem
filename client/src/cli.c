@@ -14,6 +14,7 @@
 
 #define MAX_ARGS 5
 #define CLIENT_RESPONSE_JSON_MAX 16384
+#define GROUPS_SHARED_SCOPE "__sfs_groups_root__"
 
 typedef struct {
     http_message_t* msg;
@@ -36,6 +37,22 @@ typedef struct {
 
 static int load_group_key(SSL* ssl, Session* session, const char* group_name,
                           unsigned char* out_key);
+
+static int derive_groups_root_name_key(
+    unsigned char out_key[crypto_secretbox_KEYBYTES]) {
+    static const unsigned char label[] = "sfs-groups-root-v1";
+
+    if (out_key == NULL) {
+        return -1;
+    }
+
+    if (crypto_generichash(out_key, crypto_secretbox_KEYBYTES, label,
+                           sizeof(label) - 1, NULL, 0) != 0) {
+        return -1;
+    }
+
+    return 0;
+}
 
 static void cleanup_response(client_response_t* response) {
     if (response == NULL) {
@@ -146,35 +163,6 @@ static int read_file_bytes(const char* path, unsigned char** out_buf,
     return 0;
 }
 
-static int write_file_bytes(const char* path, const unsigned char* buf,
-                            size_t len) {
-    int fd = -1;
-    size_t total = 0;
-
-    if (path == NULL || (buf == NULL && len > 0)) {
-        return -1;
-    }
-
-    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) {
-        perror("open");
-        return -1;
-    }
-
-    while (total < len) {
-        ssize_t n = write(fd, buf + total, len - total);
-        if (n <= 0) {
-            perror("write");
-            close(fd);
-            return -1;
-        }
-        total += (size_t)n;
-    }
-
-    close(fd);
-    return 0;
-}
-
 static int write_temp_file(const unsigned char* buf, size_t len,
                            const char* prefix, char** out_path) {
     char template_buf[128];
@@ -201,6 +189,50 @@ static int write_temp_file(const unsigned char* buf, size_t len,
     close(fd);
     *out_path = strdup(template_buf);
     return *out_path == NULL ? -1 : 0;
+}
+
+static int parse_write_command_input(char* input, char** out_remote_path,
+                                     char** out_text) {
+    char* cursor = NULL;
+
+    if (input == NULL || out_remote_path == NULL || out_text == NULL) {
+        return -1;
+    }
+
+    *out_remote_path = NULL;
+    *out_text = NULL;
+
+    if (strncmp(input, "write", 5) != 0 || input[5] == '\0') {
+        return -1;
+    }
+
+    cursor = input + 5;
+    while (*cursor == ' ' || *cursor == '\t') {
+        cursor++;
+    }
+    if (*cursor == '\0') {
+        return -1;
+    }
+
+    *out_remote_path = cursor;
+    while (*cursor != '\0' && *cursor != ' ' && *cursor != '\t') {
+        cursor++;
+    }
+    if (*cursor == '\0') {
+        return -1;
+    }
+
+    *cursor = '\0';
+    cursor++;
+    while (*cursor == ' ' || *cursor == '\t') {
+        cursor++;
+    }
+    if (*cursor == '\0') {
+        return -1;
+    }
+
+    *out_text = cursor;
+    return 0;
 }
 
 static int split_parent_child(const char* fullpath, char* parent,
@@ -480,6 +512,7 @@ static void initialize_session_scopes(Session* session) {
 
     cache_path_scope(session, "/", NULL);
     cache_path_scope(session, "/home", NULL);
+    cache_path_scope(session, "/groups", GROUPS_SHARED_SCOPE);
     if (session->username != NULL &&
         snprintf(home_path, sizeof(home_path), "/home/%s", session->username) > 0 &&
         strlen(home_path) < sizeof(home_path)) {
@@ -533,6 +566,9 @@ static int resolve_scope_key(SSL* ssl, Session* session,
     }
 
     if (scope->has_group) {
+        if (strcmp(scope->group_name, GROUPS_SHARED_SCOPE) == 0) {
+            return derive_groups_root_name_key(out_key);
+        }
         return load_group_key(ssl, session, scope->group_name, out_key);
     }
 
@@ -574,9 +610,15 @@ static int encrypt_logical_path(SSL* ssl, Session* session,
         char* enc_component = NULL;
         size_t current_len = strlen(out_path);
 
-        if (lookup_path_scope(session, plaintext_parent, &scope) != 0 ||
-            resolve_scope_key(ssl, session, &scope, name_key) != 0) {
-            return -1;
+        if (strcmp(plaintext_parent, "/") == 0 && strcmp(token, "groups") == 0) {
+            if (derive_groups_root_name_key(name_key) != 0) {
+                return -1;
+            }
+        } else {
+            if (lookup_path_scope(session, plaintext_parent, &scope) != 0 ||
+                resolve_scope_key(ssl, session, &scope, name_key) != 0) {
+                return -1;
+            }
         }
 
         enc_component = encrypt_name_component_hex(name_key, token);
@@ -603,6 +645,9 @@ static int encrypt_logical_path(SSL* ssl, Session* session,
         if (build_child_path(plaintext_parent, token, current_plain,
                              sizeof(current_plain)) != 0) {
             return -1;
+        }
+        if (strcmp(plaintext_parent, "/groups") == 0) {
+            cache_path_scope(session, current_plain, token);
         }
         strncpy(plaintext_parent, current_plain, sizeof(plaintext_parent) - 1);
         plaintext_parent[sizeof(plaintext_parent) - 1] = '\0';
@@ -1578,20 +1623,21 @@ static int command_create(SSL* ssl, Session* session, const char* path_arg,
     return 0;
 }
 
-static int command_write(SSL* ssl, Session* session, const char* local_path,
-                         const char* remote_path_arg) {
+static int command_write(SSL* ssl, Session* session,
+                         const char* remote_path_arg, const char* text) {
     client_response_t response = {0};
     char remote_path[SESSION_PATH_MAX];
     char encrypted_remote_path[SESSION_PATH_MAX * 3];
     char query[HTTP_MAX_QUERY_LEN];
     unsigned char file_key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
+    char* plaintext_path = NULL;
     unsigned char* encrypted_bytes = NULL;
     size_t encrypted_len = 0;
     char* encrypted_path = NULL;
     int rc = -1;
 
-    if (local_path == NULL || remote_path_arg == NULL) {
-        fprintf(stderr, "usage: write <local_path> <remote_path>\n");
+    if (remote_path_arg == NULL || text == NULL) {
+        fprintf(stderr, "usage: write <remote_path> <text>\n");
         return -1;
     }
     if (normalize_path(session->cwd, remote_path_arg, remote_path,
@@ -1609,10 +1655,20 @@ static int command_write(SSL* ssl, Session* session, const char* local_path,
         return -1;
     }
 
-    encrypted_path = encrypt_file((char*)file_key, (char*)local_path);
+    if (write_temp_file((const unsigned char*)text, strlen(text),
+                        "sfs_write_plain_", &plaintext_path) != 0) {
+        fprintf(stderr, "Failed to stage provided text\n");
+        return -1;
+    }
+
+    encrypted_path = encrypt_file((char*)file_key, plaintext_path);
     if (encrypted_path == NULL ||
         read_file_bytes(encrypted_path, &encrypted_bytes, &encrypted_len) != 0) {
-        fprintf(stderr, "Failed to encrypt local file\n");
+        fprintf(stderr, "Failed to encrypt provided text\n");
+        if (plaintext_path != NULL) {
+            unlink(plaintext_path);
+        }
+        free(plaintext_path);
         free(encrypted_path);
         return -1;
     }
@@ -1627,21 +1683,25 @@ static int command_write(SSL* ssl, Session* session, const char* local_path,
         goto cleanup;
     }
 
-    printf("Wrote %s -> %s\n", local_path, remote_path);
+    printf("Wrote text to %s\n", remote_path);
     rc = 0;
 
 cleanup:
     cleanup_response(&response);
     free(encrypted_bytes);
+    if (plaintext_path != NULL) {
+        unlink(plaintext_path);
+    }
     if (encrypted_path != NULL) {
         unlink(encrypted_path);
     }
+    free(plaintext_path);
     free(encrypted_path);
     return rc;
 }
 
-static int command_read(SSL* ssl, Session* session, const char* remote_path_arg,
-                        const char* output_path) {
+static int command_read(SSL* ssl, Session* session,
+                        const char* remote_path_arg) {
     client_response_t response = {0};
     char remote_path[SESSION_PATH_MAX];
     char encrypted_remote_path[SESSION_PATH_MAX * 3];
@@ -1654,7 +1714,7 @@ static int command_read(SSL* ssl, Session* session, const char* remote_path_arg,
     int rc = -1;
 
     if (remote_path_arg == NULL) {
-        fprintf(stderr, "usage: read <remote_path> [output_path]\n");
+        fprintf(stderr, "usage: read <remote_path>\n");
         return -1;
     }
     if (normalize_path(session->cwd, remote_path_arg, remote_path,
@@ -1700,16 +1760,9 @@ static int command_read(SSL* ssl, Session* session, const char* remote_path_arg,
         goto cleanup;
     }
 
-    if (output_path != NULL) {
-        if (write_file_bytes(output_path, plaintext, plaintext_len) != 0) {
-            goto cleanup;
-        }
-        printf("Read %s -> %s\n", remote_path, output_path);
-    } else {
-        fwrite(plaintext, 1, plaintext_len, stdout);
-        if (plaintext_len == 0 || plaintext[plaintext_len - 1] != '\n') {
-            printf("\n");
-        }
+    fwrite(plaintext, 1, plaintext_len, stdout);
+    if (plaintext_len == 0 || plaintext[plaintext_len - 1] != '\n') {
+        printf("\n");
     }
 
     rc = 0;
@@ -1928,6 +1981,11 @@ static int command_chmod(SSL* ssl, Session* session, const char* mode_bits,
 static int command_group_create(SSL* ssl, Session* session,
                                 const char* group_name) {
     client_response_t response = {0};
+    unsigned char groups_root_key[crypto_secretbox_KEYBYTES];
+    char* groups_component = NULL;
+    char* group_component = NULL;
+    char groups_root_path[SESSION_PATH_MAX];
+    char group_dir_path[SESSION_PATH_MAX];
     char wrapped_hex[(crypto_box_SEALBYTES +
                       crypto_secretstream_xchacha20poly1305_KEYBYTES) * 2 + 1];
     char json_body[CLIENT_RESPONSE_JSON_MAX];
@@ -1939,9 +1997,25 @@ static int command_group_create(SSL* ssl, Session* session,
         fprintf(stderr, "usage: group-create <group_name>\n");
         return -1;
     }
+    if (derive_groups_root_name_key(groups_root_key) != 0) {
+        return -1;
+    }
+    groups_component = encrypt_name_component_hex(groups_root_key, "groups");
+    group_component = encrypt_name_component_hex(groups_root_key, group_name);
+    if (groups_component == NULL || group_component == NULL ||
+        snprintf(groups_root_path, sizeof(groups_root_path), "/%s",
+                 groups_component) < 0 ||
+        snprintf(group_dir_path, sizeof(group_dir_path), "/%s/%s",
+                 groups_component, group_component) < 0) {
+        free(groups_component);
+        free(group_component);
+        return -1;
+    }
 
     allocated_group_key = generate_group_key();
     if (allocated_group_key == NULL) {
+        free(groups_component);
+        free(group_component);
         return -1;
     }
     memcpy(group_key, allocated_group_key, crypto_secretbox_KEYBYTES);
@@ -1953,17 +2027,24 @@ static int command_group_create(SSL* ssl, Session* session,
                    crypto_box_SEALBYTES +
                        crypto_secretstream_xchacha20poly1305_KEYBYTES,
                    wrapped_hex, sizeof(wrapped_hex)) != 0) {
+        free(groups_component);
+        free(group_component);
         free(allocated_group_key);
         free(wrapped_group_key);
         return -1;
     }
 
     snprintf(json_body, sizeof(json_body),
-             "{\"group_name\":\"%s\",\"wrapped_group_key\":\"%s\"}",
-             group_name, wrapped_hex);
+             "{\"group_name\":\"%s\",\"wrapped_group_key\":\"%s\","
+             "\"groups_root_path\":\"%s\",\"groups_root_name\":\"%s\","
+             "\"group_dir_path\":\"%s\",\"group_dir_name\":\"%s\"}",
+             group_name, wrapped_hex, groups_root_path, groups_component,
+             group_dir_path, group_component);
     if (perform_request(ssl, POST, "/groups", NULL, session->token, JSON,
                         (unsigned char*)json_body, strlen(json_body),
                         &response) != 0) {
+        free(groups_component);
+        free(group_component);
         free(allocated_group_key);
         free(wrapped_group_key);
         return -1;
@@ -1971,14 +2052,27 @@ static int command_group_create(SSL* ssl, Session* session,
     if (response.msg->status_code != 201) {
         print_response_error("group-create", &response);
         cleanup_response(&response);
+        free(groups_component);
+        free(group_component);
         free(allocated_group_key);
         free(wrapped_group_key);
         return -1;
     }
 
     cache_group_key(session, group_name, group_key);
+    cache_path_scope(session, "/groups", GROUPS_SHARED_SCOPE);
+    {
+        char logical_group_dir[SESSION_PATH_MAX];
+        if (snprintf(logical_group_dir, sizeof(logical_group_dir), "/groups/%s",
+                     group_name) > 0 &&
+            strlen(logical_group_dir) < sizeof(logical_group_dir)) {
+            cache_path_scope(session, logical_group_dir, group_name);
+        }
+    }
     printf("Created group %s\n", group_name);
     cleanup_response(&response);
+    free(groups_component);
+    free(group_component);
     free(allocated_group_key);
     free(wrapped_group_key);
     return 0;
@@ -2152,8 +2246,8 @@ static void print_help(void) {
     printf("  cd <path>\n");
     printf("  mkdir <path>\n");
     printf("  create <remote_path> [group_name]\n");
-    printf("  write <local_path> <remote_path>\n");
-    printf("  read <remote_path> [output_path]\n");
+    printf("  write <remote_path> <text>\n");
+    printf("  read <remote_path>\n");
     printf("  rm <remote_path>\n");
     printf("  mv <source_path> <destination_path>\n");
     printf("  chmod <mode_bits> <remote_path>\n");
@@ -2169,6 +2263,7 @@ static void print_help(void) {
 void cli_loop(SSL* ssl, Session *session){
     char* args[MAX_ARGS];
     char* input = NULL;
+    char* raw_input = NULL;
 
     if (ssl == NULL || session == NULL) {
         return;
@@ -2189,8 +2284,16 @@ void cli_loop(SSL* ssl, Session *session){
             continue;
         }
 
+        raw_input = strdup(input);
+        if (raw_input == NULL) {
+            fprintf(stderr, "Failed to process input\n");
+            free(input);
+            continue;
+        }
+
         str_to_arr(input, args, MAX_ARGS);
         if (args[0] == NULL) {
+            free(raw_input);
             free(input);
             continue;
         }
@@ -2206,9 +2309,16 @@ void cli_loop(SSL* ssl, Session *session){
         } else if (strcmp(args[0], "create") == 0) {
             command_create(ssl, session, args[1], args[2]);
         } else if (strcmp(args[0], "write") == 0) {
-            command_write(ssl, session, args[1], args[2]);
+            char* remote_path_arg = NULL;
+            char* text = NULL;
+
+            if (parse_write_command_input(raw_input, &remote_path_arg, &text) != 0) {
+                fprintf(stderr, "usage: write <remote_path> <text>\n");
+            } else {
+                command_write(ssl, session, remote_path_arg, text);
+            }
         } else if (strcmp(args[0], "read") == 0) {
-            command_read(ssl, session, args[1], args[2]);
+            command_read(ssl, session, args[1]);
         } else if (strcmp(args[0], "rm") == 0) {
             command_rm(ssl, session, args[1]);
         } else if (strcmp(args[0], "mv") == 0) {
@@ -2232,12 +2342,15 @@ void cli_loop(SSL* ssl, Session *session){
                 fprintf(stderr, "Logout request failed\n");
             }
             destroy_session(session);
+            free(raw_input);
             free(input);
             break;
         } else {
             printf("unknown command: %s\n", args[0]);
         }
 
+        free(raw_input);
         free(input);
+        raw_input = NULL;
     }
 }

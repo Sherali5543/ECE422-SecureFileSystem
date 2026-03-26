@@ -542,7 +542,8 @@ static int verify_signature_and_login(server_context_t* ctx,
   }
 
   clear_pending_login(ctx);
-  written = snprintf(json, sizeof(json), "{\"token\":\"%s\"}", token);
+  written = snprintf(json, sizeof(json), "{\"token\":\"%s\",\"user_id\":%d}",
+                     token, user->id);
   if (written < 0 || (size_t)written >= sizeof(json)) {
     send_json_error(ssl, response, 500, "Internal Server Error",
                     "{\"error\":\"failed to build token response\"}");

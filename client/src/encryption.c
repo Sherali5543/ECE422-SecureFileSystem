@@ -272,16 +272,45 @@ char* decrypt_file(char* file_key, char* filepath){
 
     unsigned char header[crypto_secretstream_xchacha20poly1305_HEADERBYTES];    
     
-    int fd = open(filepath, O_RDONLY);
-
-    read(fd, header, crypto_secretstream_xchacha20poly1305_HEADERBYTES);
-
-    char* temp_filename = strdup("/tmp/sfs_decrypt_XXXXXX");
+    int fd = -1;
+    char* temp_filename = NULL;
     crypto_secretstream_xchacha20poly1305_state state;
+    int temp_fd = -1;
+    int ok = 0;
 
-    int temp_fd = mkstemp(temp_filename);
+    if (file_key == NULL || filepath == NULL) {
+        return NULL;
+    }
 
-    crypto_secretstream_xchacha20poly1305_init_pull(&state, (const unsigned char*) header, (const unsigned char *)file_key);
+    fd = open(filepath, O_RDONLY);
+    if (fd < 0) {
+        return NULL;
+    }
+
+    if (read(fd, header, crypto_secretstream_xchacha20poly1305_HEADERBYTES) !=
+        crypto_secretstream_xchacha20poly1305_HEADERBYTES) {
+        close(fd);
+        return NULL;
+    }
+
+    temp_filename = strdup("/tmp/sfs_decrypt_XXXXXX");
+    if (temp_filename == NULL) {
+        close(fd);
+        return NULL;
+    }
+
+    temp_fd = mkstemp(temp_filename);
+    if (temp_fd < 0) {
+        close(fd);
+        free(temp_filename);
+        return NULL;
+    }
+
+    if (crypto_secretstream_xchacha20poly1305_init_pull(
+            &state, (const unsigned char*) header,
+            (const unsigned char*)file_key) != 0) {
+        goto cleanup;
+    }
 
     ssize_t amount_read;
     unsigned long long out_len;
@@ -291,6 +320,10 @@ char* decrypt_file(char* file_key, char* filepath){
         amount_read = read(fd, inbuf, sizeof(inbuf));
 
         if(amount_read == 0){
+            goto cleanup;
+        }
+        if (amount_read < 0) {
+            goto cleanup;
         }
 
         // do the encryption for this segment
@@ -303,6 +336,7 @@ char* decrypt_file(char* file_key, char* filepath){
             (unsigned long long) amount_read,
             NULL,
             0) != 0){
+            goto cleanup;
         }
 
 
@@ -310,21 +344,33 @@ char* decrypt_file(char* file_key, char* filepath){
         unsigned long long total_written = 0;
         while(total_written < out_len){
             ssize_t nwritten = write(temp_fd, outbuf + total_written, out_len - total_written);
+            if (nwritten <= 0) {
+                goto cleanup;
+            }
 
             total_written += (unsigned long long) nwritten;
         }
 
         if (tag == crypto_secretstream_xchacha20poly1305_TAG_FINAL) {
+            ok = 1;
             break;
         }
     }
 
+cleanup:
     close(temp_fd);
     close(fd);
 
     sodium_memzero(&state, sizeof state);
     sodium_memzero(inbuf, sizeof inbuf);
     sodium_memzero(outbuf, sizeof outbuf);
+    sodium_memzero(header, sizeof header);
+
+    if (!ok) {
+        unlink(temp_filename);
+        free(temp_filename);
+        return NULL;
+    }
 
     return temp_filename;
 }

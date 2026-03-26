@@ -1,0 +1,3 @@
+find server/deploy/storage/sfs_storage -type f -o -type d
+sqlite3 server/deploy/storage/sqlite_data/sfs.db "select cast(path as text), cast(name as text), object_type from file_metadatas;"
+xxd "$(find server/deploy/storage/sfs_storage -type f | head -n 1)" | head
