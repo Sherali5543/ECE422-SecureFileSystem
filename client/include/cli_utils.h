@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "session.h"
+#include "tls.h"
 
 /**
  * @brief Prompts an input from the user. Returns the users input as a string.
@@ -28,7 +29,7 @@ It will fill in the array till it is full, anything leftover is not allocated to
  */
 void str_to_arr(char* str, char* array[], int size);
 
-void cli_loop(Session *session);
+void cli_loop(SSL* ssl, Session *session);
 
 /**
  * @brief Enables or disables echo for user input

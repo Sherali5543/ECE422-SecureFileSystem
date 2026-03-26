@@ -10,7 +10,7 @@ login, logout, ls, cd, mkdir, create, read, write, rm, and mv
 #define MAX_ARGS 3
 char* pwd = "/home/";
 
-void cli_loop(Session *session){
+void cli_loop(SSL* ssl, Session *session){
     char* args[MAX_ARGS];
     char* input;
 

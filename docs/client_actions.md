@@ -34,9 +34,14 @@ Request body:
 
 ```json
 {
-  "filepath": "/home/alice/docs/a.txt"
+  "filepath": "/home/alice/docs/a.txt",
+  "wrapped_fek_owner": "a1b2c3d4",
+  "wrapped_fek_group": "deadbeef",
+  "wrapped_fek_other": "00112233"
 }
 ```
+
+Wrapped FEKs are sent as hex strings. `wrapped_fek_owner` is required. `wrapped_fek_group` and `wrapped_fek_other` are optional.
 
 Success response:
 
@@ -65,7 +70,7 @@ Example:
 curl -k -X POST https://localhost:8443/files \
   -H "Authorization: Bearer test-token-alice-123" \
   -H "Content-Type: application/json" \
-  -d '{"filepath":"/home/alice/docs/a.txt"}'
+  -d '{"filepath":"/home/alice/docs/a.txt","wrapped_fek_owner":"a1b2c3d4","wrapped_fek_group":"deadbeef","wrapped_fek_other":"00112233"}'
 ```
 
 ### Write File Contents
@@ -116,13 +121,16 @@ Example request:
 
 ```bash
 curl -k "https://localhost:8443/files/contents?filepath=/home/alice/docs/a.txt" \
-  -H "Authorization: Bearer test-token-alice-123"
+  -H "Authorization: Bearer test-token-alice-123" -D -
 ```
 
 Success response:
 
 - Status: `200 OK`
 - Body: raw file bytes
+- Response headers:
+  - `X-Wrapped-FEK: <hex-encoded wrapped FEK>`
+  - `X-FEK-Scope: owner|group|other`
 
 Common error cases:
 
@@ -317,11 +325,19 @@ Request body:
 ```json
 {
   "filepath": "/home/alice/docs/a.txt",
-  "mode_bits": "0644"
+  "mode_bits": "0644",
+  "wrapped_fek_owner": "a1b2c3d4",
+  "wrapped_fek_group": "deadbeef",
+  "wrapped_fek_other": "00112233"
 }
 ```
 
 `mode_bits` can be sent as an octal-style string like `"0644"` or as a numeric value like `420`.
+Wrapped FEKs are also hex strings. You only need to send the FEKs you want to replace, but the stored FEKs must still match the resulting permissions:
+- owner FEK must always exist
+- group FEK must exist if group bits are enabled and the file has a group
+- other FEK must exist if other bits are enabled
+- group/other FEKs are cleared automatically when those access bits are removed
 
 Success response:
 
@@ -338,7 +354,7 @@ Success response:
 
 Common error cases:
 
-- `400 Bad Request` for missing or invalid `filepath` or `mode_bits`
+- `400 Bad Request` for missing or invalid `filepath`, `mode_bits`, or FEK data that does not match the requested permissions
 - `401 Unauthorized` for missing or bad token
 - `403 Forbidden` if the caller is not the owner
 - `404 Not Found` if the path does not exist

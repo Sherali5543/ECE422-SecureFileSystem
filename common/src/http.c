@@ -48,6 +48,16 @@ static int commit_header(llhttp_t* parser) {
     strncpy(data->msg->x_signature, data->current_header_value,
             sizeof(data->msg->x_signature) - 1);
     data->msg->x_signature[sizeof(data->msg->x_signature) - 1] = '\0';
+  } else if (strncasecmp(data->current_header_name, "X-Wrapped-FEK",
+                         HTTP_MAX_HEADER_NAME) == 0) {
+    strncpy(data->msg->x_wrapped_fek, data->current_header_value,
+            sizeof(data->msg->x_wrapped_fek) - 1);
+    data->msg->x_wrapped_fek[sizeof(data->msg->x_wrapped_fek) - 1] = '\0';
+  } else if (strncasecmp(data->current_header_name, "X-FEK-Scope",
+                         HTTP_MAX_HEADER_NAME) == 0) {
+    strncpy(data->msg->x_fek_scope, data->current_header_value,
+            sizeof(data->msg->x_fek_scope) - 1);
+    data->msg->x_fek_scope[sizeof(data->msg->x_fek_scope) - 1] = '\0';
   } else if (strncasecmp(data->current_header_name, "X-Timestamp",
                          HTTP_MAX_HEADER_NAME) == 0) {
     // Convert string → integer
@@ -348,6 +358,24 @@ ssize_t http_build_header(const http_message_t* msg,
       if (n < 0 || (size_t)n >= sizeof(headers) - (size_t)offset) return -1;
       offset += n;
     }
+  }
+
+  if (msg->x_wrapped_fek[0] != '\0') {
+    if (checklen(msg->x_wrapped_fek, HTTP_MAX_HEADER_VALUE)) return -1;
+
+    n = snprintf(headers + offset, sizeof(headers) - (size_t)offset,
+                 "X-Wrapped-FEK: %s\r\n", msg->x_wrapped_fek);
+    if (n < 0 || (size_t)n >= sizeof(headers) - (size_t)offset) return -1;
+    offset += n;
+  }
+
+  if (msg->x_fek_scope[0] != '\0') {
+    if (checklen(msg->x_fek_scope, HTTP_MAX_HEADER_VALUE)) return -1;
+
+    n = snprintf(headers + offset, sizeof(headers) - (size_t)offset,
+                 "X-FEK-Scope: %s\r\n", msg->x_fek_scope);
+    if (n < 0 || (size_t)n >= sizeof(headers) - (size_t)offset) return -1;
+    offset += n;
   }
 
   // Common headers
