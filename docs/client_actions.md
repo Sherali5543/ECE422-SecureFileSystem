@@ -1,30 +1,141 @@
 # Client Action Guide
 
-This document describes how the client should call the server endpoints that are currently implemented for file actions and group actions.
+This guide describes the current client/server contract for auth, file actions, and group actions.
 
-## Current Auth Assumption
+## Auth Flow
 
-Right now the server uses a hardcoded test session in [server_context.c](/Users/andy/Desktop/ece422/ECE422-SecureFileSystem/server/src/server_context.c). Until real login is implemented, the client should send:
+The client no longer uses a hardcoded test token.
+
+Current auth works like this:
+
+1. `POST /auth/register`
+2. `POST /auth/login` with `username` to fetch a challenge
+3. `POST /auth/login` again with `username` and a signed challenge to receive a bearer token
+4. `POST /auth/logout` to invalidate that token
+
+All authenticated routes expect:
 
 ```http
-Authorization: Bearer test-token-alice-123
+Authorization: Bearer <session-token>
 ```
-
-All of the routes below require that header.
 
 ## Common Notes
 
-- The server is expected to run over HTTPS/TLS.
-- Logical file paths should be absolute paths like `/home/alice/docs/a.txt`.
-- The current handlers do not URL-decode query strings, so the client should send plain paths without extra escaping when possible.
-- For JSON requests, use `Content-Type: application/json`.
-- For raw file content uploads, use `Content-Type: application/octet-stream`.
+- The server runs over HTTPS/TLS.
+- The CLI uses logical plaintext paths like `/home/alice/docs/a.txt`.
+- The client encrypts each path component before sending it to the server.
+- The server stores encrypted `path` and `name` blobs and never needs plaintext names for normal file CRUD.
+- If you call the API manually with `curl`, you must send the encrypted path form, not the logical plaintext path.
+- JSON requests use `Content-Type: application/json`.
+- Raw file uploads use `Content-Type: application/octet-stream`.
 
-## File Actions
+## Encrypted Path Contract
+
+The client translates a logical path like:
+
+```text
+/home/alice/docs/a.txt
+```
+
+into an encrypted slash-delimited path like:
+
+```text
+/4b86.../c3e9.../adc8.../1a23...
+```
+
+Each component is encrypted and hex-encoded separately so the server can still traverse parent and child directories without learning the plaintext names.
+
+The server responses for metadata and listings also contain encrypted `path` and `name` values. The CLI decrypts names before displaying them.
+
+## Auth Routes
+
+### Register
+
+- Method: `POST`
+- Path: `/auth/register`
+- Content-Type: `application/json`
+
+Request body:
+
+```json
+{
+  "username": "alice",
+  "public_encryption_key": "<hex>",
+  "public_signing_key": "<hex>",
+  "home_path": "<encrypted-path>",
+  "home_name": "<encrypted-component>",
+  "user_home_path": "<encrypted-path>",
+  "user_home_name": "<encrypted-component>"
+}
+```
+
+Notes:
+
+- The client derives the public keys locally from the entered credentials.
+- The client also sends encrypted home-directory metadata so registration can provision the user's home directory immediately.
+- Registration does not auto-login.
+
+Success response:
+
+```json
+{
+  "message": "registered",
+  "user_id": 1
+}
+```
+
+### Login
+
+Step 1 request:
+
+```json
+{
+  "username": "alice"
+}
+```
+
+Step 1 response:
+
+```json
+{
+  "challenge": "<hex>"
+}
+```
+
+Step 2 request:
+
+```json
+{
+  "username": "alice",
+  "signature": "<hex>"
+}
+```
+
+Step 2 response:
+
+```json
+{
+  "token": "<session-token>"
+}
+```
+
+### Logout
+
+- Method: `POST`
+- Path: `/auth/logout`
+- Header: `Authorization: Bearer <session-token>`
+
+Success response:
+
+```json
+{
+  "message": "logged out"
+}
+```
+
+## File Routes
 
 ### Create File
-
-Create an empty file entry in metadata and create the backing file on disk.
 
 - Method: `POST`
 - Path: `/files`
@@ -34,150 +145,31 @@ Request body:
 
 ```json
 {
-  "filepath": "/home/alice/docs/a.txt",
+  "filepath": "<encrypted-path>",
   "group_name": "devs",
-  "wrapped_fek_owner": "a1b2c3d4",
-  "wrapped_fek_group": "deadbeef",
-  "wrapped_fek_other": "00112233"
+  "wrapped_fek_owner": "<hex>",
+  "wrapped_fek_group": "<hex>",
+  "wrapped_fek_other": "<hex>"
 }
 ```
 
-Wrapped FEKs are sent as hex strings. `wrapped_fek_owner` is required. `group_name`, `wrapped_fek_group`, and `wrapped_fek_other` are optional.
+Notes:
 
-If `group_name` is provided, the caller must already be a member of that group. When group access is enabled for the new file, the client must also send `wrapped_fek_group`.
+- `wrapped_fek_owner` is required.
+- `group_name`, `wrapped_fek_group`, and `wrapped_fek_other` are optional.
+- If `group_name` is provided, the caller must already be a member of that group.
 
 Success response:
-
-- Status: `201 Created`
-- Body:
 
 ```json
 {
   "message": "file created",
-  "filepath": "/home/alice/docs/a.txt",
+  "filepath": "<encrypted-path>",
   "file_id": 12
 }
 ```
 
-Common error cases:
-
-- `400 Bad Request` for missing or invalid `filepath`
-- `401 Unauthorized` for missing or bad token
-- `403 Forbidden` if the user cannot create in the parent directory
-- `404 Not Found` if the parent directory is missing
-- `409 Conflict` if the file already exists
-
-Example:
-
-```bash
-curl -k -X POST https://localhost:8443/files \
-  -H "Authorization: Bearer test-token-alice-123" \
-  -H "Content-Type: application/json" \
-  -d '{"filepath":"/home/alice/docs/a.txt","group_name":"devs","wrapped_fek_owner":"a1b2c3d4","wrapped_fek_group":"deadbeef","wrapped_fek_other":"00112233"}'
-```
-
-### Write File Contents
-
-Write raw bytes into an existing file.
-
-- Method: `PUT`
-- Path: `/files/content`
-- Query: `filepath=/absolute/path`
-- Content-Type: `application/octet-stream`
-
-Example request:
-
-```bash
-curl -k -X PUT "https://localhost:8443/files/content?filepath=/home/alice/docs/a.txt" \
-  -H "Authorization: Bearer test-token-alice-123" \
-  -H "Content-Type: application/octet-stream" \
-  --data-binary 'hello world'
-```
-
-Success response:
-
-- Status: `200 OK`
-- Body:
-
-```json
-{
-  "message": "file written"
-}
-```
-
-Common error cases:
-
-- `400 Bad Request` for missing or invalid `filepath`
-- `401 Unauthorized` for missing or bad token
-- `403 Forbidden` if the user does not have write permission
-- `404 Not Found` if the file metadata does not exist
-
-### Read File Contents
-
-Read the raw bytes for an existing file.
-
-- Method: `GET`
-- Path: `/files/contents`
-- Query: `filepath=/absolute/path`
-
-Example request:
-
-```bash
-curl -k "https://localhost:8443/files/contents?filepath=/home/alice/docs/a.txt" \
-  -H "Authorization: Bearer test-token-alice-123" -D -
-```
-
-Success response:
-
-- Status: `200 OK`
-- Body: raw file bytes
-- Response headers:
-  - `X-Wrapped-FEK: <hex-encoded wrapped FEK>`
-  - `X-FEK-Scope: owner|group|other`
-
-Common error cases:
-
-- `400 Bad Request` for missing or invalid `filepath`
-- `401 Unauthorized` for missing or bad token
-- `403 Forbidden` if the user does not have read permission
-- `404 Not Found` if the file metadata or backing file does not exist
-
-### Delete File
-
-Delete the file metadata entry and remove the backing file from storage.
-
-- Method: `DELETE`
-- Path: `/files`
-- Query: `filepath=/absolute/path`
-
-Example request:
-
-```bash
-curl -k -X DELETE "https://localhost:8443/files?filepath=/home/alice/docs/a.txt" \
-  -H "Authorization: Bearer test-token-alice-123"
-```
-
-Success response:
-
-- Status: `200 OK`
-- Body:
-
-```json
-{
-  "message": "file deleted"
-}
-```
-
-Common error cases:
-
-- `400 Bad Request` for missing or invalid `filepath`, or if the target is not a file
-- `401 Unauthorized` for missing or bad token
-- `403 Forbidden` if the user does not have delete permission
-- `404 Not Found` if the file does not exist
-
 ### Create Directory
-
-Create a directory entry in metadata and create the backing directory on disk.
 
 - Method: `POST`
 - Path: `/directories`
@@ -187,69 +179,35 @@ Request body:
 
 ```json
 {
-  "dirpath": "/home/alice/docs/projects"
+  "dirpath": "<encrypted-path>"
 }
 ```
 
-The handler also accepts `filepath` instead of `dirpath`, but `dirpath` is clearer for the client.
-
 Success response:
-
-- Status: `201 Created`
-- Body:
 
 ```json
 {
   "message": "directory created",
-  "dirpath": "/home/alice/docs/projects",
+  "dirpath": "<encrypted-path>",
   "directory_id": 17
 }
 ```
 
-Common error cases:
-
-- `400 Bad Request` for missing or invalid `dirpath`
-- `401 Unauthorized` for missing or bad token
-- `403 Forbidden` if the user cannot create inside the parent directory
-- `404 Not Found` if the parent directory does not exist
-- `409 Conflict` if the destination path already exists
-
-Example:
-
-```bash
-curl -k -X POST https://localhost:8443/directories \
-  -H "Authorization: Bearer test-token-alice-123" \
-  -H "Content-Type: application/json" \
-  -d '{"dirpath":"/home/alice/docs/projects"}'
-```
-
-### List Directory Contents
-
-List the direct children of a directory.
+### List Directory
 
 - Method: `GET`
 - Path: `/files`
-- Query: `filepath=/absolute/directory/path`
-
-Example request:
-
-```bash
-curl -k "https://localhost:8443/files?filepath=/home/alice/docs" \
-  -H "Authorization: Bearer test-token-alice-123"
-```
+- Query: `filepath=<encrypted-directory-path>`
 
 Success response:
 
-- Status: `200 OK`
-- Body:
-
 ```json
 {
-  "directory": "/home/alice/docs",
+  "directory": "<encrypted-directory-path>",
   "entries": [
     {
-      "path": "/home/alice/docs/a.txt",
-      "name": "a.txt",
+      "path": "<encrypted-path>",
+      "name": "<encrypted-component>",
       "object_type": "file",
       "owner_id": 1,
       "group_id": null,
@@ -261,16 +219,79 @@ Success response:
 }
 ```
 
-Common error cases:
+The CLI decrypts each returned `name` before printing it.
 
-- `400 Bad Request` for missing or invalid `filepath`
-- `401 Unauthorized` for missing or bad token
-- `403 Forbidden` if the user does not have directory read access
-- `404 Not Found` if the directory does not exist
+### Get Metadata
 
-### Move Or Rename A Path
+- Method: `GET`
+- Path: `/files/meta`
+- Query: `filepath=<encrypted-path>`
 
-Move or rename a file or directory.
+Success response:
+
+```json
+{
+  "path": "<encrypted-path>",
+  "name": "<encrypted-component>",
+  "object_type": "file",
+  "owner_id": 1,
+  "group_id": null,
+  "mode_bits": 416,
+  "created_at": 1774488154,
+  "updated_at": 1774488154
+}
+```
+
+The CLI uses this route to resolve metadata and scope information without relying on plaintext server paths.
+
+### Write File Contents
+
+- Method: `PUT`
+- Path: `/files/content`
+- Query: `filepath=<encrypted-path>`
+- Content-Type: `application/octet-stream`
+
+The client encrypts file contents locally with the FEK before upload.
+
+Success response:
+
+```json
+{
+  "message": "file written"
+}
+```
+
+### Read File Contents
+
+- Method: `GET`
+- Path: `/files/contents`
+- Query: `filepath=<encrypted-path>`
+
+Success response:
+
+- Status: `200 OK`
+- Body: encrypted file bytes
+- Response headers:
+  - `X-Wrapped-FEK: <hex-encoded wrapped FEK>`
+  - `X-FEK-Scope: owner|group|other`
+
+The client unwraps the FEK locally and decrypts the returned bytes before writing or displaying the plaintext.
+
+### Delete File
+
+- Method: `DELETE`
+- Path: `/files`
+- Query: `filepath=<encrypted-path>`
+
+Success response:
+
+```json
+{
+  "message": "file deleted"
+}
+```
+
+### Move Or Rename
 
 - Method: `POST`
 - Path: `/files/move`
@@ -280,44 +301,22 @@ Request body:
 
 ```json
 {
-  "source_filepath": "/home/alice/docs/a.txt",
-  "destination_filepath": "/home/alice/docs/archive/a.txt"
+  "source_filepath": "<encrypted-source-path>",
+  "destination_filepath": "<encrypted-destination-path>"
 }
 ```
 
 Success response:
 
-- Status: `200 OK`
-- Body:
-
 ```json
 {
   "message": "path moved",
-  "from": "/home/alice/docs/a.txt",
-  "to": "/home/alice/docs/archive/a.txt"
+  "from": "<encrypted-source-path>",
+  "to": "<encrypted-destination-path>"
 }
 ```
 
-Common error cases:
-
-- `400 Bad Request` for an invalid move request or moving a directory into itself
-- `401 Unauthorized` for missing or bad token
-- `403 Forbidden` if the user cannot move the source or cannot create in the destination parent
-- `404 Not Found` if the source or destination parent does not exist
-- `409 Conflict` if the destination path already exists
-
-Example:
-
-```bash
-curl -k -X POST https://localhost:8443/files/move \
-  -H "Authorization: Bearer test-token-alice-123" \
-  -H "Content-Type: application/json" \
-  -d '{"source_filepath":"/home/alice/docs/a.txt","destination_filepath":"/home/alice/docs/archive/a.txt"}'
-```
-
 ### Update Permissions
-
-Update the stored Unix-style mode bits for a file or directory.
 
 - Method: `PATCH`
 - Path: `/files/permissions`
@@ -327,46 +326,25 @@ Request body:
 
 ```json
 {
-  "filepath": "/home/alice/docs/a.txt",
-  "mode_bits": "0644",
-  "wrapped_fek_owner": "a1b2c3d4",
-  "wrapped_fek_group": "deadbeef",
-  "wrapped_fek_other": "00112233"
+  "filepath": "<encrypted-path>",
+  "mode_bits": "0640",
+  "wrapped_fek_owner": "<hex>",
+  "wrapped_fek_group": "<hex>",
+  "wrapped_fek_other": "<hex>"
 }
 ```
 
-`mode_bits` can be sent as an octal-style string like `"0644"` or as a numeric value like `420`.
-Wrapped FEKs are also hex strings. You only need to send the FEKs you want to replace, but the stored FEKs must still match the resulting permissions:
-- owner FEK must always exist
-- group FEK must exist if group bits are enabled and the file has a group
-- other FEK must exist if other bits are enabled
-- group/other FEKs are cleared automatically when those access bits are removed
+Notes:
 
-Success response:
+- `mode_bits` can be an octal-style string like `"0640"` or a numeric value.
+- Wrapped FEKs are hex strings.
+- Owner FEK must always exist.
+- Group FEK must exist if group bits are enabled and the file has a group.
+- Other FEK must exist if other bits are enabled.
 
-- Status: `200 OK`
-- Body:
-
-```json
-{
-  "message": "permissions updated",
-  "filepath": "/home/alice/docs/a.txt",
-  "mode_bits": 420
-}
-```
-
-Common error cases:
-
-- `400 Bad Request` for missing or invalid `filepath`, `mode_bits`, or FEK data that does not match the requested permissions
-- `401 Unauthorized` for missing or bad token
-- `403 Forbidden` if the caller is not the owner
-- `404 Not Found` if the path does not exist
-
-## Group Actions
+## Group Routes
 
 ### Create Group
-
-Create a new group and store the creator as both the group owner and the first group member.
 
 - Method: `POST`
 - Path: `/groups`
@@ -377,16 +355,11 @@ Request body:
 ```json
 {
   "group_name": "devs",
-  "wrapped_group_key": "a1b2c3d4"
+  "wrapped_group_key": "<hex>"
 }
 ```
 
-`wrapped_group_key` is the new group key wrapped for the creator, encoded as hex.
-
 Success response:
-
-- Status: `201 Created`
-- Body:
 
 ```json
 {
@@ -397,24 +370,7 @@ Success response:
 }
 ```
 
-Common error cases:
-
-- `400 Bad Request` for invalid `group_name` or `wrapped_group_key`
-- `401 Unauthorized` for missing or bad token
-- `409 Conflict` if the group already exists
-
-Example:
-
-```bash
-curl -k -X POST https://localhost:8443/groups \
-  -H "Authorization: Bearer test-token-alice-123" \
-  -H "Content-Type: application/json" \
-  -d '{"group_name":"devs","wrapped_group_key":"a1b2c3d4"}'
-```
-
 ### Add User To Group
-
-Add a user to an existing group and store that user’s wrapped group key.
 
 - Method: `POST`
 - Path: `/groups/members`
@@ -426,41 +382,13 @@ Request body:
 {
   "group_name": "devs",
   "username": "bob",
-  "wrapped_group_key": "b2c3d4e5"
+  "wrapped_group_key": "<hex>"
 }
 ```
 
-Success response:
-
-- Status: `200 OK`
-- Body:
-
-```json
-{
-  "message": "user added to group"
-}
-```
-
-Common error cases:
-
-- `400 Bad Request` for invalid JSON fields
-- `401 Unauthorized` for missing or bad token
-- `403 Forbidden` if the caller is not the group owner
-- `404 Not Found` if the group or user does not exist
-- `409 Conflict` if the user is already in the group
-
-Example:
-
-```bash
-curl -k -X POST https://localhost:8443/groups/members \
-  -H "Authorization: Bearer test-token-alice-123" \
-  -H "Content-Type: application/json" \
-  -d '{"group_name":"devs","username":"bob","wrapped_group_key":"b2c3d4e5"}'
-```
+Only the group owner may add members.
 
 ### Remove User From Group
-
-Remove a user from an existing group.
 
 - Method: `DELETE`
 - Path: `/groups/members`
@@ -475,90 +403,17 @@ Request body:
 }
 ```
 
-Success response:
+Only the group owner may remove members.
 
-- Status: `200 OK`
-- Body:
-
-```json
-{
-  "message": "user removed from group"
-}
-```
-
-Common error cases:
-
-- `400 Bad Request` for invalid JSON fields
-- `401 Unauthorized` for missing or bad token
-- `403 Forbidden` if the caller is not the group owner
-- `404 Not Found` if the group or user does not exist, or if the user is not in the group
-
-### Get Wrapped Group Key
-
-Return the current caller's wrapped group key for a specific group.
-
-- Method: `GET`
-- Path: `/groups/key`
-- Query: `group_name=<group_name>`
-
-Example request:
-
-```bash
-curl -k "https://localhost:8443/groups/key?group_name=devs" \
-  -H "Authorization: Bearer test-token-alice-123"
-```
-
-Success response:
-
-- Status: `200 OK`
-- Body:
-
-```json
-{
-  "group_id": 3,
-  "group_name": "devs",
-  "owner_id": 1,
-  "wrapped_group_key": "a1b2c3d4"
-}
-```
-
-Common error cases:
-
-- `400 Bad Request` for an invalid `group_name` query
-- `401 Unauthorized` for missing or bad token
-- `403 Forbidden` if the caller is not a member of the group
-- `404 Not Found` if the group does not exist
-
-Example:
-
-```bash
-curl -k -X DELETE https://localhost:8443/groups/members \
-  -H "Authorization: Bearer test-token-alice-123" \
-  -H "Content-Type: application/json" \
-  -d '{"group_name":"devs","username":"bob"}'
-```
-
-### List A User's Groups
-
-Return the groups for a given user.
+### List User Groups
 
 - Method: `GET`
 - Path: `/groups`
 - Optional query: `username=<username>`
 
-If `username` is omitted, the server uses the username from the current session token.
-
-Example request:
-
-```bash
-curl -k "https://localhost:8443/groups?username=bob" \
-  -H "Authorization: Bearer test-token-alice-123"
-```
+If `username` is omitted, the server uses the user from the current token.
 
 Success response:
-
-- Status: `200 OK`
-- Body:
 
 ```json
 {
@@ -574,34 +429,30 @@ Success response:
 }
 ```
 
-Common error cases:
+### Get Wrapped Group Key
 
-- `400 Bad Request` for an invalid `username` query
-- `401 Unauthorized` for missing or bad token
-- `404 Not Found` if the target user does not exist
+- Method: `GET`
+- Path: `/groups/key`
+- Query: `group_name=<group_name>`
+
+Success response:
+
+```json
+{
+  "group_id": 3,
+  "group_name": "devs",
+  "owner_id": 1,
+  "wrapped_group_key": "<hex>"
+}
+```
 
 ### Get User Public Keys
-
-Return the stored public encryption and signing keys for a specific user.
 
 - Method: `GET`
 - Path: `/users/keys`
 - Query: `username=<username>`
 
-This route is mainly useful for client-side sharing flows such as wrapping a
-group key for another user before calling `POST /groups/members`.
-
-Example request:
-
-```bash
-curl -k "https://localhost:8443/users/keys?username=bob" \
-  -H "Authorization: Bearer test-token-alice-123"
-```
-
 Success response:
-
-- Status: `200 OK`
-- Body:
 
 ```json
 {
@@ -611,36 +462,27 @@ Success response:
 }
 ```
 
-Common error cases:
-
-- `400 Bad Request` for an invalid `username` query
-- `401 Unauthorized` for missing or bad token
-- `404 Not Found` if the target user does not exist
-
-## Auth Routes
-
-The client also uses these routes through the login and registration flow:
-
-- `POST /auth/login`
-- `POST /auth/register`
-- `POST /auth/logout`
+This route is used by the client to wrap a group key for another user before calling `POST /groups/members`.
 
 ## Suggested Client Wrapper Shape
 
-If you want a thin client wrapper layer, these are the core actions it should expose:
-
-- `login(username, password)`
 - `register(username, password)`
+- `login(username, password)`
 - `logout()`
+- `encrypt_logical_path(path)`
+- `decrypt_entry_name(parent_path, encrypted_name)`
+- `get_metadata(filepath)`
 - `create_file(filepath, wrapped_fek_owner, group_name=None, wrapped_fek_group=None, wrapped_fek_other=None)`
+- `create_directory(dirpath)`
+- `list_directory(dirpath)`
 - `write_file(filepath, bytes)`
 - `read_file(filepath)`
 - `delete_file(filepath)`
+- `move_path(source, destination)`
+- `update_permissions(filepath, mode_bits, wrapped_fek_owner=None, wrapped_fek_group=None, wrapped_fek_other=None)`
 - `create_group(group_name, wrapped_group_key)`
 - `get_group_key(group_name)`
 - `get_user_keys(username)`
 - `add_group_member(group_name, username, wrapped_group_key)`
 - `remove_group_member(group_name, username)`
 - `list_user_groups(username=None)`
-
-That will line up closely with the current server implementation and make it easier to swap in real auth later.

@@ -92,6 +92,13 @@ Represents a user's membership in a group, including the joined group info and t
 
 Represents a row from `file_metadatas`, including path/name blobs, ownership, mode bits, object type, wrapped FEKs, and timestamps.
 
+Important note: the current client stores encrypted name data in these fields. In normal client-driven flows:
+
+- `path` is an encrypted slash-delimited sequence of hex-encoded components
+- `name` is the encrypted hex-encoded last component only
+
+So these blobs should not be assumed to contain plaintext filenames.
+
 For optional DB fields, the wrapper uses flags such as:
 
 - `has_group_id`
@@ -130,6 +137,8 @@ Looks up a user by numeric ID and fills `out_user` if a row exists.
 #### `int db_create_user(server_context_t* ctx, const char* username, const void* public_encryption_key, size_t public_encryption_key_len, const void* public_signing_key, size_t public_signing_key_len, int* out_user_id);`
 
 Inserts a new user row with a username, public encryption key, and public signing key and optionally returns the inserted user ID.
+
+User registration and the `seed_user` dev tool also provision encrypted home-directory metadata rows after the user is created.
 
 ### Groups
 
@@ -204,5 +213,7 @@ Rolls back the active transaction and discards uncommitted writes.
 - `db_init()` must be called before any other wrapper that touches the database.
 - `db_cleanup()` should always be called when the context is no longer using SQLite.
 - File paths and names in `db_file_metadata_t` are stored as blobs, so both the byte buffer and its length matter.
+- In the current encrypted-name design, the DB stores encrypted path/name values rather than plaintext paths from the CLI.
 - If an optional metadata field should be stored as `NULL`, its matching `has_*` flag must be set to `0`.
 - Some expected failure cases, like duplicate inserts or foreign key violations, still print SQLite errors to `stderr`.
+- Schema changes do not migrate existing SQLite tables automatically. When the schema changes, a local `sfs.db` often needs to be recreated.

@@ -102,7 +102,6 @@ static int send_login_json(SSL* ssl, const char* body) {
   msg->content_type = JSON;
   msg->content_length = body_len;
 
-  printf("client login request body: %s\n", body);
   send_request(ssl, msg);
   destroy_message(msg);
 
@@ -129,7 +128,6 @@ static int send_register_json(SSL* ssl, const char* body) {
   msg->content_type = JSON;
   msg->content_length = body_len;
 
-  printf("client register request body: %s\n", body);
   send_request(ssl, msg);
   destroy_message(msg);
 
@@ -168,8 +166,6 @@ static char* request_login_challenge(SSL* ssl, const char* username) {
     destroy_message(response);
     return NULL;
   }
-
-  printf("client login response body: %s\n", response_body);
 
   json = cJSON_Parse(response_body);
   if (!json) {
@@ -223,8 +219,6 @@ static char* submit_login_signature(SSL* ssl, const char* username,
     destroy_message(response);
     return NULL;
   }
-
-  printf("client login response body: %s\n", response_body);
 
   json = cJSON_Parse(response_body);
   if (!json) {
@@ -335,10 +329,9 @@ int register_account(SSL* ssl) {
     goto cleanup;
   }
 
-  printf("client register response body: %s\n", response_body);
   if (response->status_code == 201) {
     rc = 0;
-    printf("Registration successful for user '%s'\n", username);
+    printf("Registered user '%s'\n", username);
   }
 
 cleanup:
@@ -378,7 +371,6 @@ int logout(SSL* ssl, Session* session) {
   msg->content_type = NONE;
   msg->content_length = 0;
 
-  printf("client logout request token: %s\n", session->token);
   send_request(ssl, msg);
   destroy_message(msg);
 
@@ -387,9 +379,8 @@ int logout(SSL* ssl, Session* session) {
     return -1;
   }
 
-  if (response->content_length > 0 &&
-      read_response_body(response, ssl, &response_body) == 0) {
-    printf("client logout response body: %s\n", response_body);
+  if (response->content_length > 0) {
+    read_response_body(response, ssl, &response_body);
   }
 
   if (response->status_code == 200) {
@@ -500,7 +491,7 @@ Session login(SSL* ssl) {
   s.user_keys = user_keys;
   s.sign_keys = sign_keys;
   snprintf(s.cwd, sizeof(s.cwd), "/home/%s", username);
-  printf("Login successful. Session token: %s\n", s.token);
+  printf("Login successful.\n");
   return s;
 }
 

@@ -32,6 +32,7 @@ int main(void){
     if (strcmp(action, "login") == 0) {
       session = login(ssl);
       if (session.token != NULL) {
+        run_integrity_check(ssl, &session);
         cli_loop(ssl, &session);
       }
     } else if (strcmp(action, "register") == 0) {

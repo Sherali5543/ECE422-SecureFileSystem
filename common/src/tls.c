@@ -84,8 +84,6 @@ SSL* tls_server_accept(SSL_CTX* ctx, BIO* abio) {
     warnx("Failed to obtain client BIO");
     return NULL;
   }
-  fprintf(stderr, "New client connection accepted\n");
-
   SSL* ssl = SSL_new(ctx);
   if (ssl == NULL) {
     tls_warn(NULL, client_bio, "Error creating SSL handle for new connection");
@@ -140,11 +138,10 @@ SSL* tls_client_connect(SSL_CTX* ctx, const char* server_addr,
   if (SSL_connect(ssl) < 1) {
     // Can get additional info on failure
     if (SSL_get_verify_result(ssl) != X509_V_OK)
-      printf("Verify error: %s\n",
-             X509_verify_cert_error_string(SSL_get_verify_result(ssl)));
+      fprintf(stderr, "Verify error: %s\n",
+              X509_verify_cert_error_string(SSL_get_verify_result(ssl)));
     tls_error(ctx, NULL, ssl, "TLS handshake failed");
   }
-  printf("Connected with %s encryption\n", SSL_get_cipher(ssl));
 
   return ssl;
 }

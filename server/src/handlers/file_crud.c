@@ -2106,7 +2106,7 @@ void update_file_permissions(http_message_t* msg, SSL* ssl,
   }
 
   {
-    char resp[256];
+    char resp[CREATE_FILE_RESPONSE_MAX];
     int n = snprintf(resp, sizeof(resp),
                      "{\"message\":\"permissions updated\",\"filepath\":\"%s\","
                      "\"mode_bits\":%d}",

@@ -177,8 +177,6 @@ static int parse_login_request(http_message_t* msg, SSL* ssl,
     return -1;
   }
 
-  printf("login request body: %s\n", out->body);
-
   out->json = cJSON_Parse(out->body);
   if (!out->json) {
     send_json_error(ssl, response, 400, "Bad Request",
@@ -253,8 +251,6 @@ static int parse_register_request(http_message_t* msg, SSL* ssl,
                     "{\"error\":\"failed to read registration body\"}");
     return -1;
   }
-
-  printf("register request body: %s\n", out->body);
 
   out->json = cJSON_Parse(out->body);
   if (!out->json) {
@@ -452,7 +448,6 @@ static int issue_challenge(server_context_t* ctx, const db_user_t* user,
     return -1;
   }
 
-  printf("login challenge response body: %s\n", json);
   set_json_response(response, 200, "OK", (size_t)written);
   send_response(ssl, response);
   write_json_body(ssl, json);
@@ -554,7 +549,6 @@ static int verify_signature_and_login(server_context_t* ctx,
     return -1;
   }
 
-  printf("login success response body: %s\n", json);
   set_json_response(response, 200, "OK", (size_t)written);
   send_response(ssl, response);
   write_json_body(ssl, json);
@@ -591,10 +585,8 @@ void login_user(http_message_t* msg, SSL* ssl, http_message_t* response,
   }
 
   if (req.signature_hex == NULL) {
-    printf("Issuing challenge\n");
     issue_challenge(ctx, &user, response, ssl);
   } else {
-    printf("Veriyfing\n");
     verify_signature_and_login(ctx, &req, &user, response, ssl);
   }
 
@@ -633,7 +625,6 @@ void logout_user(http_message_t* msg, SSL* ssl, http_message_t* response,
     set_json_response(response, 200, "OK", strlen(json));
     send_response(ssl, response);
     write_json_body(ssl, json);
-    printf("logout success response body: %s\n", json);
     return;
   }
 
@@ -712,7 +703,6 @@ void register_user(http_message_t* msg, SSL* ssl, http_message_t* response,
     return;
   }
 
-  printf("register success response body: %s\n", json);
   set_json_response(response, 201, "Created", (size_t)written);
   send_response(ssl, response);
   write_json_body(ssl, json);

@@ -26,6 +26,14 @@ typedef struct {
     char group_name[SESSION_GROUP_NAME_MAX];
 } path_scope_info_t;
 
+typedef struct {
+    size_t directories_scanned;
+    size_t files_scanned;
+    size_t corrupted_names;
+    size_t corrupted_files;
+    size_t scan_errors;
+} integrity_report_t;
+
 static int load_group_key(SSL* ssl, Session* session, const char* group_name,
                           unsigned char* out_key);
 
@@ -461,6 +469,23 @@ static int cache_path_scope(Session* session, const char* logical_path,
         session->path_scopes[slot].group_name[0] = '\0';
     }
     return 0;
+}
+
+static void initialize_session_scopes(Session* session) {
+    char home_path[SESSION_PATH_MAX];
+
+    if (session == NULL) {
+        return;
+    }
+
+    cache_path_scope(session, "/", NULL);
+    cache_path_scope(session, "/home", NULL);
+    if (session->username != NULL &&
+        snprintf(home_path, sizeof(home_path), "/home/%s", session->username) > 0 &&
+        strlen(home_path) < sizeof(home_path)) {
+        cache_path_scope(session, home_path, NULL);
+    }
+    cache_path_scope(session, session->cwd, NULL);
 }
 
 static int lookup_path_scope(Session* session, const char* logical_path,
@@ -1027,6 +1052,224 @@ static int resolve_directory_name_key(SSL* ssl, Session* session,
         *out_scope = scope;
     }
     return 0;
+}
+
+static int verify_owned_file_integrity(SSL* ssl, Session* session,
+                                       const char* remote_path,
+                                       integrity_report_t* report) {
+    client_response_t response = {0};
+    char encrypted_remote_path[SESSION_PATH_MAX * 3];
+    char query[HTTP_MAX_QUERY_LEN];
+    unsigned char file_key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
+    char* encrypted_path = NULL;
+    char* decrypted_path = NULL;
+    unsigned char* plaintext = NULL;
+    size_t plaintext_len = 0;
+    int rc = -1;
+
+    if (ssl == NULL || session == NULL || remote_path == NULL || report == NULL) {
+        return -1;
+    }
+
+    report->files_scanned++;
+    if (encrypt_logical_path(ssl, session, remote_path, encrypted_remote_path,
+                             sizeof(encrypted_remote_path)) != 0) {
+        report->scan_errors++;
+        return -1;
+    }
+
+    snprintf(query, sizeof(query), "filepath=%s", encrypted_remote_path);
+    if (perform_request(ssl, GET, "/files/contents", query, session->token, NONE,
+                        NULL, 0, &response) != 0) {
+        report->scan_errors++;
+        return -1;
+    }
+    if (response.msg->status_code != 200) {
+        report->corrupted_files++;
+        cleanup_response(&response);
+        return -1;
+    }
+
+    if (resolve_file_key_from_read(ssl, session, remote_path,
+                                   response.msg->x_wrapped_fek,
+                                   response.msg->x_fek_scope, file_key) != 0) {
+        report->corrupted_files++;
+        cleanup_response(&response);
+        return -1;
+    }
+
+    if (write_temp_file(response.body, response.body_len, "sfs_integrity_enc_",
+                        &encrypted_path) != 0) {
+        report->scan_errors++;
+        cleanup_response(&response);
+        return -1;
+    }
+
+    decrypted_path = decrypt_file((char*)file_key, encrypted_path);
+    if (decrypted_path == NULL ||
+        read_file_bytes(decrypted_path, &plaintext, &plaintext_len) != 0) {
+        report->corrupted_files++;
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    cleanup_response(&response);
+    free(plaintext);
+    if (encrypted_path != NULL) {
+        unlink(encrypted_path);
+    }
+    if (decrypted_path != NULL) {
+        unlink(decrypted_path);
+    }
+    free(encrypted_path);
+    free(decrypted_path);
+    return rc;
+}
+
+static int scan_directory_integrity(SSL* ssl, Session* session,
+                                    const char* path,
+                                    integrity_report_t* report) {
+    client_response_t response = {0};
+    cJSON* json = NULL;
+    cJSON* entries = NULL;
+    char encrypted_path[SESSION_PATH_MAX * 3];
+    char query[HTTP_MAX_QUERY_LEN];
+    unsigned char dir_key[crypto_secretbox_KEYBYTES];
+    int rc = -1;
+
+    if (ssl == NULL || session == NULL || path == NULL || report == NULL) {
+        return -1;
+    }
+
+    if (encrypt_logical_path(ssl, session, path, encrypted_path,
+                             sizeof(encrypted_path)) != 0 ||
+        resolve_directory_name_key(ssl, session, path, dir_key, NULL) != 0) {
+        report->scan_errors++;
+        return -1;
+    }
+
+    snprintf(query, sizeof(query), "filepath=%s", encrypted_path);
+    if (perform_request(ssl, GET, "/files", query, session->token, NONE, NULL,
+                        0, &response) != 0) {
+        report->scan_errors++;
+        return -1;
+    }
+    if (response.msg->status_code != 200) {
+        report->scan_errors++;
+        cleanup_response(&response);
+        return -1;
+    }
+
+    report->directories_scanned++;
+    json = cJSON_Parse((char*)response.body);
+    entries = json ? cJSON_GetObjectItemCaseSensitive(json, "entries") : NULL;
+    if (!cJSON_IsArray(entries)) {
+        report->scan_errors++;
+        goto cleanup;
+    }
+
+    cJSON* item = NULL;
+    cJSON_ArrayForEach(item, entries) {
+        cJSON* name_json = cJSON_GetObjectItemCaseSensitive(item, "name");
+        cJSON* type_json = cJSON_GetObjectItemCaseSensitive(item, "object_type");
+        cJSON* owner_id_json = cJSON_GetObjectItemCaseSensitive(item, "owner_id");
+        cJSON* group_id_json = cJSON_GetObjectItemCaseSensitive(item, "group_id");
+        char* decrypted_name = NULL;
+        char child_path[SESSION_PATH_MAX];
+
+        if (!cJSON_IsString(name_json) || name_json->valuestring == NULL ||
+            !cJSON_IsString(type_json) || type_json->valuestring == NULL) {
+            report->scan_errors++;
+            continue;
+        }
+
+        decrypted_name = decrypt_name_component_hex(dir_key, name_json->valuestring);
+        if (decrypted_name == NULL) {
+            report->corrupted_names++;
+            continue;
+        }
+
+        if (build_child_path(path, decrypted_name, child_path,
+                             sizeof(child_path)) != 0) {
+            free(decrypted_name);
+            report->scan_errors++;
+            continue;
+        }
+
+        if (strcmp(type_json->valuestring, "directory") == 0) {
+            if (cJSON_IsNumber(group_id_json)) {
+                char group_name[SESSION_GROUP_NAME_MAX];
+
+                if (fetch_group_name_by_id(ssl, session, group_id_json->valueint,
+                                           group_name, sizeof(group_name)) == 0) {
+                    cache_path_scope(session, child_path, group_name);
+                }
+            } else {
+                path_scope_info_t inherited = {0};
+                if (lookup_path_scope(session, path, &inherited) == 0) {
+                    cache_path_scope(session, child_path,
+                                     inherited.has_group ? inherited.group_name
+                                                         : NULL);
+                }
+            }
+            scan_directory_integrity(ssl, session, child_path, report);
+        } else if (strcmp(type_json->valuestring, "file") == 0 &&
+                   cJSON_IsNumber(owner_id_json) &&
+                   owner_id_json->valueint == session->id) {
+            verify_owned_file_integrity(ssl, session, child_path, report);
+        }
+
+        free(decrypted_name);
+    }
+
+    rc = 0;
+
+cleanup:
+    cJSON_Delete(json);
+    cleanup_response(&response);
+    return rc;
+}
+
+void run_integrity_check(SSL* ssl, Session* session) {
+    integrity_report_t report = {0};
+    char home_path[SESSION_PATH_MAX];
+    int rc = -1;
+
+    if (ssl == NULL || session == NULL || session->username == NULL) {
+        return;
+    }
+
+    initialize_session_scopes(session);
+    if (snprintf(home_path, sizeof(home_path), "/home/%s", session->username) <= 0 ||
+        strlen(home_path) >= sizeof(home_path)) {
+        fprintf(stderr, "Integrity check skipped: invalid home path\n");
+        return;
+    }
+
+    rc = scan_directory_integrity(ssl, session, home_path, &report);
+    if (rc != 0 && report.scan_errors == 0 && report.corrupted_files == 0 &&
+        report.corrupted_names == 0) {
+        fprintf(stderr, "Integrity check could not complete.\n");
+        return;
+    }
+
+    if (report.corrupted_files > 0 || report.corrupted_names > 0) {
+        fprintf(stderr,
+                "Integrity warning: %zu corrupted file(s) and %zu corrupted name(s) detected.\n",
+                report.corrupted_files, report.corrupted_names);
+        return;
+    }
+
+    if (report.scan_errors > 0) {
+        fprintf(stderr,
+                "Integrity check completed with %zu scan issue(s), but no corruption was detected.\n",
+                report.scan_errors);
+        return;
+    }
+
+    printf("Integrity check passed.\n");
 }
 
 static int command_pwd(Session* session) {
@@ -1926,20 +2169,12 @@ static void print_help(void) {
 void cli_loop(SSL* ssl, Session *session){
     char* args[MAX_ARGS];
     char* input = NULL;
-    char home_path[SESSION_PATH_MAX];
 
     if (ssl == NULL || session == NULL) {
         return;
     }
 
-    cache_path_scope(session, "/", NULL);
-    cache_path_scope(session, "/home", NULL);
-    if (session->username != NULL &&
-        snprintf(home_path, sizeof(home_path), "/home/%s", session->username) > 0 &&
-        strlen(home_path) < sizeof(home_path)) {
-        cache_path_scope(session, home_path, NULL);
-    }
-    cache_path_scope(session, session->cwd, NULL);
+    initialize_session_scopes(session);
 
     while (true) {
         printf("%s:%s$ ", session->username, session->cwd);
